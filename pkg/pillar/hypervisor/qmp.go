@@ -5,15 +5,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"time"
+
 	"github.com/lf-edge/eve/pkg/pillar/types"
 	"github.com/lf-edge/go-qemu/qmp"
 	"github.com/sirupsen/logrus"
-	"os"
-	"time"
 )
 
 // this package implements subset of
-//     https://qemu.weilnetz.de/doc/qemu-qmp-ref.html
+//     https://qemu-project.gitlab.io/qemu/interop/qemu-qmp-ref.html
 
 const sockTimeout = 10 * time.Second
 

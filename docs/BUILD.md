@@ -104,15 +104,15 @@ You must have the following installed in order to build EVE:
 
 Each "Installed as Needed" build tool will place its final executable in `${GOPATH}/bin/`, e.g. `~/go/bin/linuxkit`.
 
-To build a specific tool, you can execute `make build-tools/bin/<tool-name>`, e.g. `make build-tools/bin/bin/linuxkit`.
+To build a specific tool, you can execute `make build-tools/bin/<tool-name>`, e.g. `make build-tools/bin/linuxkit`.
 
 This target does the following:
 
 1. Create a temporary directory
-1. Initialize git in that directory
-1. Fetch just the target commit to the directory
-1. Install tools as needed
-1. Remove the temporary directory
+2. Initialize git in that directory
+3. Fetch just the target commit to the directory
+4. Install tools as needed
+5. Remove the temporary directory
 
 To build all of the tools, in the project root directory, run `make build-tools`
 
