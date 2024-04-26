@@ -161,7 +161,7 @@ func getQemuStatus(socket string) (types.SwState, error) {
 
 		if errs != nil {
 			logrus.Errorf("getQemuStatus: %d retrieving status attempts failed '%v', but eventually '%s' status was retrieved, so return SUCCESS and continue",
-				attempt, errs, result.Return.Status)
+				attempt-1, errs, result.Return.Status)
 			errs = nil
 		}
 
