@@ -964,7 +964,6 @@ func (ctx KvmContext) Start(domainName string) error {
 		logrus.Errorf("Error waiting for Qmp for domain %s: %v", domainName, err)
 		return err
 	}
-	logrus.Infof("done launching qemu device model")
 
 	qmpFile := GetQmpExecutorSocket(domainName)
 
