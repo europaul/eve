@@ -47,7 +47,7 @@ const (
 
 var (
 	// ErrImageNotFound describes the error for when image is not found in containerd
-	ErrImageNotFound = errors.New("Image not found")
+	ErrImageNotFound = errors.New("image not found")
 )
 
 type containerdCAS struct {
@@ -260,13 +260,13 @@ func (c *containerdCAS) IngestBlob(ctx context.Context, blobs ...types.BlobStatu
 		// Step 1.1: Read the blob from verified dir or provided content
 		switch {
 		case blobFile == "" && len(blob.Content) == 0:
-			err = fmt.Errorf("IngestBlob(%s): both blobFile and blobContent empty %s: %+s",
-				blob.Sha256, blobFile, err.Error())
+			err = fmt.Errorf("IngestBlob(%s): both blobFile and blobContent empty %s",
+				blob.Sha256, blobFile)
 			logrus.Errorf(err.Error())
 			return loadedBlobs, err
 		case blobFile != "" && len(blob.Content) != 0:
-			err = fmt.Errorf("IngestBlob(%s): both blobFile and blobContent provided, cannot pick, %s: %+s",
-				blob.Sha256, blobFile, err.Error())
+			err = fmt.Errorf("IngestBlob(%s): both blobFile and blobContent provided, cannot pick, %s",
+				blob.Sha256, blobFile)
 			logrus.Errorf(err.Error())
 			return loadedBlobs, err
 		case blobFile != "":
@@ -902,7 +902,6 @@ func (c *containerdCAS) RemoveContainerRootDir(rootPath string) error {
 func (c *containerdCAS) IngestBlobsAndCreateImage(reference string, root types.BlobStatus, blobs ...types.BlobStatus) ([]types.BlobStatus, error) {
 
 	logrus.Infof("IngestBlobsAndCreateImage: Attempting to Ingest %d blobs and add reference: %s", len(blobs), reference)
-	loadedBlobs := make([]types.BlobStatus, 0)
 	newCtxWithLease, deleteLease, err := c.ctrdClient.CtrNewUserServicesCtxWithLease()
 	if err != nil {
 		err = fmt.Errorf("IngestBlobsAndCreateImage: Unable load blobs for reference %s. "+
@@ -913,7 +912,7 @@ func (c *containerdCAS) IngestBlobsAndCreateImage(reference string, root types.B
 	// deleting the lease means that containerd will be free to GC any blob that doesn't have a tag
 	// or image reference from elsewhere
 	defer deleteLease()
-	loadedBlobs, err = c.IngestBlob(newCtxWithLease, blobs...)
+	loadedBlobs, err := c.IngestBlob(newCtxWithLease, blobs...)
 	if err != nil {
 		err = fmt.Errorf("IngestBlobsAndCreateImage: Exception while loading blobs into CAS: %v", err.Error())
 		logrus.Errorf(err.Error())
@@ -993,6 +992,8 @@ func getIndexManifest(c *containerdCAS, blobSha256 string) (*v1.IndexManifest, e
 }
 
 // getManifestFromIndex: returns Manifest for the current architecture from IndexManifest
+//
+//nolint:unused
 func getManifestFromIndex(c *containerdCAS, indexManifest *v1.IndexManifest) (*v1.Manifest, error) {
 	manifestSha256, err := getManifestBlobSha256FromIndex(indexManifest)
 	if err != nil {

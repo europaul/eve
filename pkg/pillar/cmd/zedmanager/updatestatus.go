@@ -335,7 +335,7 @@ func doInstall(ctx *zedmanagerContext,
 		newVrs := []types.VolumeRefStatus{}
 		for i := range status.VolumeRefStatusList {
 			vrs := &status.VolumeRefStatusList[i]
-			_, ok := domainVolMap[vrs.Key()]
+			_, ok := domainVolMap[vrs.VolumeKey()]
 			vrc := getVolumeRefConfigFromAIConfig(&config, *vrs)
 			if vrc != nil || ok {
 				newVrs = append(newVrs, *vrs)
@@ -384,13 +384,11 @@ func doInstall(ctx *zedmanagerContext,
 			return true, false
 		}
 		newVrs := types.VolumeRefStatus{
-			VolumeID:               vrc.VolumeID,
-			GenerationCounter:      vrc.GenerationCounter,
-			LocalGenerationCounter: vrc.LocalGenerationCounter,
-			RefCount:               vrc.RefCount,
-			PendingAdd:             true,
-			State:                  types.INITIAL,
-			VerifyOnly:             vrc.VerifyOnly,
+			VolumeUniqueID: vrc.VolumeUniqueID,
+			AppUUID:        vrc.AppUUID,
+			PendingAdd:     true,
+			State:          types.INITIAL,
+			VerifyOnly:     vrc.VerifyOnly,
 		}
 		log.Functionf("Adding new VolumeRefStatus %v", newVrs)
 		status.VolumeRefStatusList = append(status.VolumeRefStatusList, newVrs)
@@ -494,13 +492,7 @@ func doInstallVolumeRef(ctx *zedmanagerContext, config types.AppInstanceConfig,
 	status *types.AppInstanceStatus, vrs *types.VolumeRefStatus) bool {
 
 	changed := false
-	var vrc *types.VolumeRefConfig
-	for i := range config.VolumeRefConfigList {
-		vrc = &config.VolumeRefConfigList[i]
-		if vrc.VolumeID == vrs.VolumeID {
-			break
-		}
-	}
+	vrc := getVolumeRefConfigFromAIConfig(&config, *vrs)
 
 	if vrs.PendingAdd {
 		MaybeAddVolumeRefConfig(ctx, config.UUIDandVersion.UUID,

@@ -23,21 +23,19 @@ func handleVolumeRefCreate(ctxArg interface{}, key string,
 		updateVolumeStatusRefCount(ctx, vs)
 		publishVolumeStatus(ctx, vs)
 		status = &types.VolumeRefStatus{
-			VolumeID:               config.VolumeID,
-			GenerationCounter:      config.GenerationCounter,
-			LocalGenerationCounter: config.LocalGenerationCounter,
-			RefCount:               config.RefCount,
-			State:                  vs.State,
-			ActiveFileLocation:     vs.FileLocation,
-			ContentFormat:          vs.ContentFormat,
-			ReadOnly:               vs.ReadOnly,
-			DisplayName:            vs.DisplayName,
-			MaxVolSize:             vs.MaxVolSize,
-			WWN:                    vs.WWN,
-			VerifyOnly:             config.VerifyOnly,
-			Target:                 vs.Target,
-			CustomMeta:             vs.CustomMeta,
-			ReferenceName:          vs.ReferenceName,
+			VolumeUniqueID:     config.VolumeUniqueID,
+			AppUUID:            config.AppUUID,
+			State:              vs.State,
+			ActiveFileLocation: vs.FileLocation,
+			ContentFormat:      vs.ContentFormat,
+			ReadOnly:           vs.ReadOnly,
+			DisplayName:        vs.DisplayName,
+			MaxVolSize:         vs.MaxVolSize,
+			WWN:                vs.WWN,
+			VerifyOnly:         config.VerifyOnly,
+			Target:             vs.Target,
+			CustomMeta:         vs.CustomMeta,
+			ReferenceName:      vs.ReferenceName,
 		}
 		if vs.HasError() {
 			description := vs.ErrorDescription
@@ -49,12 +47,10 @@ func handleVolumeRefCreate(ctxArg interface{}, key string,
 		needUpdateVol = true
 	} else {
 		status = &types.VolumeRefStatus{
-			VolumeID:               config.VolumeID,
-			GenerationCounter:      config.GenerationCounter,
-			LocalGenerationCounter: config.LocalGenerationCounter,
-			RefCount:               config.RefCount,
-			State:                  types.INITIAL, // Waiting for VolumeConfig from zedagent
-			VerifyOnly:             config.VerifyOnly,
+			VolumeUniqueID: config.VolumeUniqueID,
+			AppUUID:        config.AppUUID,
+			State:          types.INITIAL, // Waiting for VolumeConfig from zedagent
+			VerifyOnly:     config.VerifyOnly,
 		}
 	}
 	publishVolumeRefStatus(ctx, status)
@@ -82,7 +78,6 @@ func handleVolumeRefModify(ctxArg interface{}, key string,
 	if status == nil {
 		log.Fatalf("VolumeRefStatus doesn't exist at handleVolumeRefModify for %s", key)
 	}
-	status.RefCount = config.RefCount
 	needUpdateVol := false
 	if status.VerifyOnly != config.VerifyOnly {
 		status.VerifyOnly = config.VerifyOnly
@@ -172,7 +167,7 @@ func updateVolumeRefStatus(ctx *volumemgrContext, vs *types.VolumeStatus) {
 	items := sub.GetAll()
 	for _, st := range items {
 		config := st.(types.VolumeRefConfig)
-		if config.Key() == vs.Key() {
+		if config.VolumeKey() == vs.Key() {
 			updateVolumeStatusRefCount(ctx, vs)
 			publishVolumeStatus(ctx, vs)
 			status := lookupVolumeRefStatus(ctx, config.Key())
@@ -198,35 +193,33 @@ func updateVolumeRefStatus(ctx *volumemgrContext, vs *types.VolumeStatus) {
 					status.ClearErrorWithSource()
 				}
 				publishVolumeRefStatus(ctx, status)
-				return
+			} else {
+				status = &types.VolumeRefStatus{
+					VolumeUniqueID:     config.VolumeUniqueID,
+					AppUUID:            config.AppUUID,
+					State:              vs.State,
+					ActiveFileLocation: vs.FileLocation,
+					ContentFormat:      vs.ContentFormat,
+					ReadOnly:           vs.ReadOnly,
+					DisplayName:        vs.DisplayName,
+					MaxVolSize:         vs.MaxVolSize,
+					WWN:                vs.WWN,
+					VerifyOnly:         config.VerifyOnly,
+					Target:             vs.Target,
+					ReferenceName:      vs.ReferenceName,
+				}
+				if vs.HasError() {
+					description := vs.ErrorDescription
+					description.ErrorEntities = []*types.ErrorEntity{{
+						EntityID:   vs.VolumeID.String(),
+						EntityType: types.ErrorEntityVolume,
+					}}
+					status.SetErrorWithSourceAndDescription(description, types.VolumeStatus{})
+				} else if status.IsErrorSource(types.VolumeStatus{}) {
+					status.ClearErrorWithSource()
+				}
+				publishVolumeRefStatus(ctx, status)
 			}
-			status = &types.VolumeRefStatus{
-				VolumeID:               config.VolumeID,
-				GenerationCounter:      config.GenerationCounter,
-				LocalGenerationCounter: config.LocalGenerationCounter,
-				RefCount:               config.RefCount,
-				State:                  vs.State,
-				ActiveFileLocation:     vs.FileLocation,
-				ContentFormat:          vs.ContentFormat,
-				ReadOnly:               vs.ReadOnly,
-				DisplayName:            vs.DisplayName,
-				MaxVolSize:             vs.MaxVolSize,
-				WWN:                    vs.WWN,
-				VerifyOnly:             config.VerifyOnly,
-				Target:                 vs.Target,
-				ReferenceName:          vs.ReferenceName,
-			}
-			if vs.HasError() {
-				description := vs.ErrorDescription
-				description.ErrorEntities = []*types.ErrorEntity{{
-					EntityID:   vs.VolumeID.String(),
-					EntityType: types.ErrorEntityVolume,
-				}}
-				status.SetErrorWithSourceAndDescription(description, types.VolumeStatus{})
-			} else if status.IsErrorSource(types.VolumeStatus{}) {
-				status.ClearErrorWithSource()
-			}
-			publishVolumeRefStatus(ctx, status)
 		}
 	}
 }
