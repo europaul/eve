@@ -66,7 +66,7 @@ func TestCreateDomConfigOnlyCom1(t *testing.T) {
 	}
 	disks := []types.DiskStatus{
 		{Format: zconfig.Format_QCOW2, FileLocation: "/foo/bar.qcow2", Devtype: "hdd"},
-		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/container", Devtype: "9P"},
+		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/container", Devtype: "9P", VolumeKey: "15cc666b-788f-4677-91bc-c7cb0add69f4"},
 		{Format: zconfig.Format_RAW, FileLocation: "/foo/bar.raw", Devtype: "hdd"},
 		{Format: zconfig.Format_RAW, FileLocation: "/foo/cd.iso", Devtype: "cdrom"},
 		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/volume", Devtype: ""},
@@ -264,7 +264,7 @@ func TestCreateDomConfigOnlyCom1(t *testing.T) {
 [device "fs1"]
   driver = "virtio-9p-pci"
   fsdev = "fsdev1"
-  mount_tag = "share_dir"
+  mount_tag = "15cc666b-788f-4677-91bc-c7cb0add69f4"
   addr = "0x5"
 
 
@@ -536,7 +536,7 @@ func TestCreateDomConfigOnlyCom1(t *testing.T) {
 [device "fs1"]
   driver = "virtio-9p-pci"
   fsdev = "fsdev1"
-  mount_tag = "share_dir"
+  mount_tag = "15cc666b-788f-4677-91bc-c7cb0add69f4"
   addr = "0x5"
 
 
@@ -786,7 +786,7 @@ func TestCreateDomConfigOnlyCom1(t *testing.T) {
 [device "fs1"]
   driver = "virtio-9p-pci"
   fsdev = "fsdev1"
-  mount_tag = "share_dir"
+  mount_tag = "15cc666b-788f-4677-91bc-c7cb0add69f4"
   addr = "0x5"
 
 
@@ -1020,7 +1020,7 @@ func addNonExistingAdapter(config *types.DomainConfig, aa *types.AssignableAdapt
 func qemuDisks() ([]types.DiskConfig, []types.DiskStatus) {
 	dc := []types.DiskConfig{
 		{Format: zconfig.Format_QCOW2, FileLocation: "/foo/bar.qcow2"},
-		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/container"},
+		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/container", VolumeKey: "15cc666b-788f-4677-91bc-c7cb0add69f4"},
 		{Format: zconfig.Format_RAW, FileLocation: "/foo/bar.raw"},
 		{Format: zconfig.Format_RAW, FileLocation: "/foo/cd.iso"},
 		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/volume"},
@@ -1028,7 +1028,7 @@ func qemuDisks() ([]types.DiskConfig, []types.DiskStatus) {
 	}
 	ds := []types.DiskStatus{
 		{Format: zconfig.Format_QCOW2, FileLocation: "/foo/bar.qcow2", Devtype: "hdd"},
-		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/container", Devtype: "9P"},
+		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/container", Devtype: "9P", VolumeKey: "15cc666b-788f-4677-91bc-c7cb0add69f4"},
 		{Format: zconfig.Format_RAW, FileLocation: "/foo/bar.raw", Devtype: "hdd"},
 		{Format: zconfig.Format_RAW, FileLocation: "/foo/cd.iso", Devtype: "cdrom"},
 		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/volume", Devtype: ""},
@@ -1101,7 +1101,7 @@ func domainConfigAndAssignableAdapters(dcl []types.DiskConfig) (types.DomainConf
 func qemuDisksLegacy() ([]types.DiskConfig, []types.DiskStatus) {
 	dc := []types.DiskConfig{
 		{Format: zconfig.Format_QCOW2, FileLocation: "/foo/bar.qcow2"},
-		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/container"},
+		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/container", VolumeKey: "15cc666b-788f-4677-91bc-c7cb0add69f4"},
 		{Format: zconfig.Format_RAW, FileLocation: "/foo/bar.raw"},
 		{Format: zconfig.Format_RAW, FileLocation: "/foo/cd.iso"},
 		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/volume"},
@@ -1109,7 +1109,7 @@ func qemuDisksLegacy() ([]types.DiskConfig, []types.DiskStatus) {
 	}
 	ds := []types.DiskStatus{
 		{Format: zconfig.Format_QCOW2, FileLocation: "/foo/bar.qcow2", Devtype: "legacy"},
-		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/container", Devtype: "9P"},
+		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/container", Devtype: "9P", VolumeKey: "15cc666b-788f-4677-91bc-c7cb0add69f4"},
 		{Format: zconfig.Format_RAW, FileLocation: "/foo/bar.raw", Devtype: "legacy"},
 		{Format: zconfig.Format_RAW, FileLocation: "/foo/cd.iso", Devtype: "cdrom"},
 		{Format: zconfig.Format_CONTAINER, FileLocation: "/foo/volume", Devtype: ""},
@@ -1255,7 +1255,7 @@ func domConfigArm64() string {
 [device "fs1"]
   driver = "virtio-9p-pci"
   fsdev = "fsdev1"
-  mount_tag = "share_dir"
+  mount_tag = "15cc666b-788f-4677-91bc-c7cb0add69f4"
   addr = "0x5"
 
 
@@ -1540,7 +1540,7 @@ func domConfigAmd64FML() string {
 [device "fs1"]
   driver = "virtio-9p-pci"
   fsdev = "fsdev1"
-  mount_tag = "share_dir"
+  mount_tag = "15cc666b-788f-4677-91bc-c7cb0add69f4"
   addr = "0x5"
 
 
@@ -1840,7 +1840,7 @@ func domConfigAmd64Legacy() string {
 [device "fs1"]
   driver = "virtio-9p-pci"
   fsdev = "fsdev1"
-  mount_tag = "share_dir"
+  mount_tag = "15cc666b-788f-4677-91bc-c7cb0add69f4"
   addr = "0x5"
 
 
@@ -2127,7 +2127,7 @@ func domConfigAmd64() string {
 [device "fs1"]
   driver = "virtio-9p-pci"
   fsdev = "fsdev1"
-  mount_tag = "share_dir"
+  mount_tag = "15cc666b-788f-4677-91bc-c7cb0add69f4"
   addr = "0x5"
 
 
@@ -2414,7 +2414,7 @@ func domConfigContainerVNC() string {
 [device "fs0"]
   driver = "virtio-9p-pci"
   fsdev = "fsdev0"
-  mount_tag = "share_dir"
+  mount_tag = "container_rootfs"
   addr = "0x4"
 
 

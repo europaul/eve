@@ -294,8 +294,13 @@ func (ctx xenContext) CreateDomConfig(domainName string,
 		switch ds.Devtype {
 		case "":
 		case "9P":
+			mountTag := ds.VolumeKey
+			if config.IsOCIContainer() && i == 0 {
+				// Container's rootfs needs to have a constant mount tag to be mounted by initrd-init
+				mountTag = "container_rootfs"
+			}
 			p9Strings = append(p9Strings,
-				fmt.Sprintf("'tag=share_dir,security_model=none,path=%s'", ds.FileLocation))
+				fmt.Sprintf("'tag=%s,security_model=none,path=%s'", mountTag, ds.FileLocation))
 		default:
 			access := "rw"
 			if ds.ReadOnly {

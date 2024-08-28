@@ -276,7 +276,7 @@ const qemuDiskTemplate = `
 [device "fs{{.DiskID}}"]
   driver = "virtio-9p-pci"
   fsdev = "fsdev{{.DiskID}}"
-  mount_tag = "share_dir"
+  mount_tag = "{{.MountTag}}"
   addr = "{{printf "0x%x" .PCIId}}"
 {{else}}
 [device "pci.{{.PCIId}}"]
@@ -809,13 +809,14 @@ func (ctx KvmContext) CreateDomConfig(domainName string,
 		Machine                          string
 		PCIId, DiskID, SATAId, NumQueues int
 		AioType                          string
+		MountTag                         string
 		types.DiskStatus
 	}{Machine: ctx.devicemodel, PCIId: 4, DiskID: 0, SATAId: 0, AioType: "io_uring", NumQueues: config.VCpus}
 
 	t, _ = template.New("qemuDisk").
 		Funcs(template.FuncMap{"Fmt": func(f zconfig.Format) string { return strings.ToLower(f.String()) }}).
 		Parse(qemuDiskTemplate)
-	for _, ds := range diskStatusList {
+	for i, ds := range diskStatusList {
 		if ds.Devtype == "" {
 			continue
 		}
@@ -823,6 +824,12 @@ func (ctx KvmContext) CreateDomConfig(domainName string,
 			// This is application custom data. It is forwarded to the VM
 			// differently - as a download url in zedrouter
 			continue
+		}
+		if config.IsOCIContainer() && i == 0 {
+			// Container's rootfs needs to have a constant mount tag to be mounted by initrd-init
+			diskContext.MountTag = "container_rootfs"
+		} else {
+			diskContext.MountTag = ds.VolumeKey
 		}
 		diskContext.DiskStatus = ds
 		if err := t.Execute(file, diskContext); err != nil {
