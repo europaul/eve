@@ -45,13 +45,14 @@ var dhcpcdScript = []string{"eve", "exec", "pillar", "/opt/zededa/bin/dhcpcd.sh"
 // for all the different task usecases
 type ociSpec struct {
 	specs.Spec
-	name         string
-	client       *Client
-	exposedPorts map[string]struct{}
-	volumes      map[string]struct{}
-	labels       map[string]string
-	stopSignal   string
-	service      bool
+	name          string
+	client        *Client
+	exposedPorts  map[string]struct{}
+	volumes       map[string]struct{}
+	labels        map[string]string
+	stopSignal    string
+	service       bool
+	containerOpts []containerd.NewContainerOpts
 }
 
 // OCISpec provides methods to manipulate OCI runtime specifications and create containers based on them
@@ -98,6 +99,7 @@ func (client *Client) NewOciSpec(name string, service bool) (OCISpec, error) {
 
 	s.Root.Path = "/"
 	s.service = service
+	s.containerOpts = make([]containerd.NewContainerOpts, 0)
 	return s, nil
 }
 
@@ -114,7 +116,36 @@ func (s *ociSpec) AddLoader(volume string) error {
 		return err
 	}
 
-	spec.Root = &specs.Root{Readonly: true, Path: filepath.Join(volume, "rootfs")}
+	// Get the name of the loader
+	pathSplit := strings.Split(volume, "/")
+	loaderName := pathSplit[len(pathSplit)-1]
+
+	switch loaderName {
+	case "xen-tools":
+		// Since xen-tools is one of the system services, it's already available on the disk.
+		// So we are going to use a clean snapshot of xen-tools to create a user app task.
+
+		appSnapshotName := s.name
+
+		ctrdCtx, done := s.client.CtrNewUserServicesCtx()
+		defer done()
+
+		// check if the snapshot xen-tools is available
+		snapshotter := s.client.ctrdClient.SnapshotService(containerd.DefaultSnapshotter)
+
+		// prepare a new active snapshot for the user app
+		_, err := snapshotter.Prepare(ctrdCtx, appSnapshotName, "xen-tools")
+		if err != nil {
+			return fmt.Errorf("AddLoader: View error: %s", err.Error())
+		}
+
+		s.containerOpts = append(s.containerOpts, containerd.WithSnapshot(appSnapshotName))
+
+		spec.Root.Path = "rootfs"
+	default:
+		return fmt.Errorf("AddLoader: unknown loader %s", loaderName)
+	}
+
 	spec.Linux.Resources = s.Linux.Resources
 	spec.Linux.CgroupsPath = s.Linux.CgroupsPath
 
@@ -261,11 +292,14 @@ func (s *ociSpec) Load(file *os.File) error {
 func (s *ociSpec) CreateContainer(removeExisting bool) error {
 	ctrdCtx, done := s.client.CtrNewUserServicesCtx()
 	defer done()
-	_, err := s.client.ctrdClient.NewContainer(ctrdCtx, s.name, containerd.WithSpec(&s.Spec))
+
+	containerOpts := append(s.containerOpts, containerd.WithSpec(&s.Spec))
+
+	_, err := s.client.ctrdClient.NewContainer(ctrdCtx, s.name, containerOpts...)
 	// if container exists, is stopped and we are asked to remove existing - try that
 	if err != nil && removeExisting {
 		_ = s.client.CtrDeleteContainer(ctrdCtx, s.name)
-		_, err = s.client.ctrdClient.NewContainer(ctrdCtx, s.name, containerd.WithSpec(&s.Spec))
+		_, err = s.client.ctrdClient.NewContainer(ctrdCtx, s.name, containerOpts...)
 	}
 	return err
 }

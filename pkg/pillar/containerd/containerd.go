@@ -21,6 +21,7 @@ import (
 	"github.com/containerd/containerd/api/services/tasks/v1"
 	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/content"
+	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/mount"
@@ -338,6 +339,63 @@ func (client *Client) CtrMountSnapshot(ctx context.Context, snapshotID, targetPa
 	return mounts[0].Mount(targetPath)
 }
 
+// CtrCreateSnapshotFromExistingRootfs creates a snapshot from an existing rootfs
+func (client *Client) CtrCreateSnapshotFromExistingRootfs(ctx context.Context, snapshotName, rootfsPath string) error {
+	if err := client.verifyCtr(ctx, true); err != nil {
+		return fmt.Errorf("CreateSnapshotFromExistingRootfs: exception while verifying ctrd client: %s", err.Error())
+	}
+
+	// Ensure the rootfs path exists
+	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
+		return fmt.Errorf("rootfs path does not exist: %s", rootfsPath)
+	}
+
+	tmpSnapshotName := snapshotName + "-tmp"
+
+	snapshotter := client.ctrdClient.SnapshotService(defaultSnapshotter)
+
+	tmpSnapshotExists, err := client.CtrSnapshotExists(ctx, tmpSnapshotName)
+	if err != nil {
+		return fmt.Errorf("failed to check if tmp snapshot exists: %w", err)
+	}
+	if tmpSnapshotExists {
+		// existance of the temporary snapshot is a sign that the job was not finished properly
+		// so we remove it and start over
+		err = snapshotter.Remove(ctx, tmpSnapshotName)
+		if err != nil {
+			return fmt.Errorf("failed to remove existing snapshot: %w", err)
+		}
+	}
+
+	// Prepare a temporary directory for the snapshot
+	mounts, err := snapshotter.Prepare(ctx, tmpSnapshotName, "")
+	if err != nil {
+		return fmt.Errorf("failed to prepare snapshot: %w", err)
+	}
+
+	// Get the mount point path
+	mountPoint := mounts[0].Source
+
+	// Copy the contents of the existing rootfs to the new snapshot mount point
+	cmd := exec.Command("cp", "-a", rootfsPath+"/.", mountPoint)
+	err = cmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to copy rootfs: %w", err)
+	}
+
+	// Set the label to prevent the snapshot from being garbage collected
+	labels := map[string]string{"containerd.io/gc.root": time.Now().UTC().Format(time.RFC3339)}
+
+	// Commit the snapshot
+	err = snapshotter.Commit(ctx, snapshotName, tmpSnapshotName, snapshots.WithLabels(labels))
+	if err != nil {
+		return fmt.Errorf("failed to commit snapshot: %w", err)
+	}
+
+	fmt.Println("Snapshot prepared with rootfs")
+	return nil
+}
+
 // CtrListSnapshotInfo returns a list of all snapshot's info present in containerd's snapshot store.
 func (client *Client) CtrListSnapshotInfo(ctx context.Context) ([]snapshots.Info, error) {
 	if err := client.verifyCtr(ctx, true); err != nil {
@@ -352,6 +410,21 @@ func (client *Client) CtrListSnapshotInfo(ctx context.Context) ([]snapshots.Info
 		return nil, fmt.Errorf("CtrListSnapshotInfo: Exception while fetching snapshot list. %s", err.Error())
 	}
 	return snapshotInfoList, nil
+}
+
+func (client *Client) CtrSnapshotExists(ctx context.Context, snapshotName string) (bool, error) {
+	if err := client.verifyCtr(ctx, true); err != nil {
+		return false, err
+	}
+
+	snapshotter := client.ctrdClient.SnapshotService(defaultSnapshotter)
+	_, err := snapshotter.Stat(ctx, snapshotName)
+	if errdefs.IsNotFound(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // CtrGetSnapshotUsage returns snapshot's usage for snapshotID present in containerd's snapshot store

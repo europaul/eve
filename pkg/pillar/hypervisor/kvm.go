@@ -489,6 +489,28 @@ func newKvm() Hypervisor {
 		logrus.Fatalf("couldn't initialize containerd (this should not happen): %v. Exiting.", err)
 		return nil // it really never returns on account of above
 	}
+
+	ctrdUserCtx, done := ctrdCtx.ctrdClient.CtrNewUserServicesCtx()
+	defer done()
+
+	// check if the snapshot xen-tools is available
+	snapshotExists, err := ctrdCtx.ctrdClient.CtrSnapshotExists(ctrdUserCtx, "xen-tools")
+	if err != nil {
+		logrus.Fatalf("couldn't check if snapshot xen-tools exists: %v. Exiting.", err)
+		return nil // it really never returns on account of above
+	}
+	if snapshotExists {
+		logrus.Infof("snapshot xen-tools exists")
+	} else {
+		// Create a snapshot of xen-tools if it does not exist
+		err = ctrdCtx.ctrdClient.CtrCreateSnapshotFromExistingRootfs(ctrdUserCtx, "xen-tools", "/containers/services/xen-tools/rootfs")
+		if err != nil {
+			logrus.Fatalf("couldn't create snapshot xen-tools: %v. Exiting.", err)
+			return nil // it really never returns on account of above
+		}
+		logrus.Infof("created snapshot xen-tools")
+	}
+
 	// later on we may want to pass device model machine type in DomainConfig directly;
 	// for now -- lets just pick a static device model based on the host architecture
 	// "-cpu host",
