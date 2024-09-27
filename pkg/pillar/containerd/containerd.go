@@ -4,8 +4,10 @@
 package containerd
 
 import (
+	"archive/tar"
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	"google.golang.org/grpc/connectivity"
@@ -21,6 +24,7 @@ import (
 	"github.com/containerd/containerd/api/services/tasks/v1"
 	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/content"
+	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/images"
 	"github.com/containerd/containerd/leases"
 	"github.com/containerd/containerd/mount"
@@ -34,12 +38,12 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/utils/persist"
 	"github.com/opencontainers/go-digest"
 	"github.com/opencontainers/image-spec/identity"
-	"github.com/opencontainers/runtime-spec/specs-go"
+	runtimespecs "github.com/opencontainers/runtime-spec/specs-go"
 	"github.com/vishvananda/netlink"
 
 	v1stat "github.com/containerd/cgroups/stats/v1"
-	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	spec "github.com/opencontainers/image-spec/specs-go/v1"
+	imagespecs "github.com/opencontainers/image-spec/specs-go"
+	ocispecs "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/sirupsen/logrus"
 )
 
@@ -179,7 +183,7 @@ func (client *Client) CtrWriteBlob(ctx context.Context, blobHash string, expecte
 		return fmt.Errorf("CtrWriteBlob: exception while validating hash format of %s. %v", blobHash, err)
 	}
 	if err := content.WriteBlob(ctx, client.contentStore, blobHash, reader,
-		spec.Descriptor{Digest: expectedDigest, Size: int64(expectedSize)}); err != nil {
+		ocispecs.Descriptor{Digest: expectedDigest, Size: int64(expectedSize)}); err != nil {
 		return fmt.Errorf("CtrWriteBlob: Exception while writing blob: %s. %s", blobHash, err.Error())
 	}
 	return nil
@@ -207,7 +211,7 @@ func (client *Client) CtrReadBlob(ctx context.Context, blobHash string) (io.Read
 	if err != nil {
 		return nil, fmt.Errorf("CtrReadBlob: Exception getting info of blob: %s. %s", blobHash, err.Error())
 	}
-	readerAt, err := client.contentStore.ReaderAt(ctx, spec.Descriptor{Digest: shaDigest})
+	readerAt, err := client.contentStore.ReaderAt(ctx, ocispecs.Descriptor{Digest: shaDigest})
 	if err != nil {
 		return nil, fmt.Errorf("CtrReadBlob: Exception while reading blob: %s. %s", blobHash, err.Error())
 	}
@@ -246,6 +250,317 @@ func (client *Client) CtrDeleteBlob(ctx context.Context, blobHash string) error 
 	return client.contentStore.Delete(ctx, digest.Digest(blobHash))
 }
 
+// CtrCreateImageFromRootfs creates an OCI image from an existing rootfs directory
+func (client *Client) CtrCreateImageFromRootfs(ctx context.Context, imageName, rootfsPath string) error {
+	if err := client.verifyCtr(ctx, true); err != nil {
+		return fmt.Errorf("CtrCreateImageFromRootfs: exception while verifying ctrd client: %s", err.Error())
+	}
+
+	// Create a tarball from the rootfs directory
+	tarPath := "/tmp/rootfs.tar"
+	err := createTarballFromRootfs(rootfsPath, tarPath)
+	if err != nil {
+		return fmt.Errorf("failed to create tarball from rootfs: %w", err)
+	}
+
+	// Open the tarball file
+	file, err := os.Open(tarPath)
+	if err != nil {
+		return fmt.Errorf("failed to open tarball: %w", err)
+	}
+	defer file.Close()
+
+	// Write the tarball to the content store
+	layerDesc, err := writeTarballToContentStore(ctx, client.contentStore, file)
+	if err != nil {
+		return fmt.Errorf("failed to write tarball to content store: %w", err)
+	}
+	fmt.Printf("Layer %s written to content store\n", layerDesc.Digest)
+
+	// Create a minimal OCI config (you may want to customize this)
+	config := ocispecs.Image{
+		Platform: ocispecs.Platform{
+			Architecture: runtime.GOARCH,
+			OS:           "linux",
+		},
+		RootFS: ocispecs.RootFS{
+			Type:    "layers",
+			DiffIDs: []digest.Digest{layerDesc.Digest},
+		},
+	}
+
+	configDesc, err := writeImageConfig(ctx, client.contentStore, config)
+	if err != nil {
+		return fmt.Errorf("failed to write image config: %w", err)
+	}
+	fmt.Printf("Config %s written to content store\n", configDesc.Digest)
+
+	// Create the manifest that points to the layer and config
+	manifest := ocispecs.Manifest{
+		Versioned: imagespecs.Versioned{SchemaVersion: 2},
+		Config:    configDesc,
+		Layers:    []ocispecs.Descriptor{layerDesc},
+	}
+
+	manifestLabels := map[string]string{
+		"containerd.io/gc.ref.content.config": configDesc.Digest.String(),
+		"containerd.io/gc.ref.content.l.0":    layerDesc.Digest.String(),
+	}
+
+	manifestDesc, err := writeManifest(ctx, client.contentStore, manifest, manifestLabels)
+	if err != nil {
+		return fmt.Errorf("failed to write manifest: %w", err)
+	}
+	fmt.Printf("Manifest %s written to content store\n", manifestDesc.Digest)
+
+	// Create the image and register it in containerd
+	image := images.Image{
+		Name:   imageName,
+		Target: manifestDesc,
+	}
+	im, err := client.ctrdClient.ImageService().Create(ctx, image)
+	if err != nil {
+		return fmt.Errorf("failed to create image: %w", err)
+	}
+
+	// Unpacking the image (creating the snapshots etc), so that it can be used right away
+	ctrdImage := containerd.NewImage(client.ctrdClient, im)
+	err = client.UnpackClientImage(ctrdImage)
+	if err != nil {
+		return fmt.Errorf("failed to unpack image: %w", err)
+	}
+
+	// Remove the tarball file
+	if err := os.Remove(tarPath); err != nil {
+		return fmt.Errorf("failed to remove tarball: %w", err)
+	}
+
+	return nil
+}
+
+// createTarballFromRootfs creates a tarball from the rootfs directory
+func createTarballFromRootfs(rootfsPath, tarPath string) error {
+	// Create the tarball file
+	tarFile, err := os.Create(tarPath)
+	if err != nil {
+		return fmt.Errorf("failed to create tarball: %w", err)
+	}
+	defer tarFile.Close()
+
+	// Create a new tar writer
+	tw := tar.NewWriter(tarFile)
+	defer tw.Close()
+
+	// Walk through the rootfs directory and add files to the tarball
+	err = filepath.Walk(rootfsPath, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return fmt.Errorf("error walking the path %s: %w", path, err)
+		}
+
+		// Get the relative path to preserve the directory structure in the tarball
+		relPath, err := filepath.Rel(rootfsPath, path)
+		if err != nil {
+			return fmt.Errorf("error getting relative path: %w", err)
+		}
+
+		// Create a tar header from the file info
+		header, err := tar.FileInfoHeader(info, "")
+		if err != nil {
+			return fmt.Errorf("error creating tar header: %w", err)
+		}
+		header.Name = relPath
+
+		// Special handling for symbolic links
+		if info.Mode()&os.ModeSymlink != 0 {
+			// Read the symlink target
+			linkTarget, err := os.Readlink(path)
+			if err != nil {
+				return fmt.Errorf("error reading symlink %s: %w", path, err)
+			}
+			// Ensure the link target is preserved exactly as it is
+			header.Linkname = linkTarget
+		}
+
+		// Write the header to the tarball
+		if err := tw.WriteHeader(header); err != nil {
+			return fmt.Errorf("error writing tar header: %w", err)
+		}
+
+		// If it's a directory or symlink, we don't need to copy content (just metadata)
+		if info.IsDir() || (info.Mode()&os.ModeSymlink != 0) {
+			return nil
+		}
+
+		// If it's a regular file, write the file content to the tarball
+		if info.Mode().IsRegular() {
+			file, err := os.Open(path)
+			if err != nil {
+				return fmt.Errorf("failed to open file %s: %w", path, err)
+			}
+			defer file.Close()
+
+			if _, err := io.Copy(tw, file); err != nil {
+				return fmt.Errorf("error copying file content to tarball: %w", err)
+			}
+		}
+
+		return nil
+	})
+
+	if err != nil {
+		return fmt.Errorf("error tarring rootfs: %w", err)
+	}
+
+	return nil
+}
+
+// writeTarballToContentStore writes a tarball to the content store
+func writeTarballToContentStore(ctx context.Context, cs content.Store, file *os.File) (ocispecs.Descriptor, error) {
+	// Compute the digest and size of the tarball
+	h := sha256.New()
+	size, err := io.Copy(h, file)
+	if err != nil {
+		return ocispecs.Descriptor{}, fmt.Errorf("failed to calculate tarball digest: %w", err)
+	}
+	digest := digest.NewDigestFromBytes(digest.SHA256, h.Sum(nil))
+
+	// Reset file pointer
+	_, err = file.Seek(0, io.SeekStart)
+	if err != nil {
+		return ocispecs.Descriptor{}, fmt.Errorf("failed to seek tarball: %w", err)
+	}
+
+	// Create a unique reference for the content store writer
+	ref := fmt.Sprintf("tarball-%s", digest.String())
+
+	// Write the tarball to the content store using a reference
+	writer, err := cs.Writer(ctx, content.WithRef(ref), content.WithDescriptor(ocispecs.Descriptor{
+		Digest: digest,
+		Size:   size,
+	}))
+	// Return if the content already exists
+	if err != nil {
+		if errdefs.IsAlreadyExists(err) {
+			return ocispecs.Descriptor{
+				MediaType: ocispecs.MediaTypeImageLayer,
+				Digest:    digest,
+				Size:      size,
+			}, nil
+		}
+		return ocispecs.Descriptor{}, fmt.Errorf("failed to create writer: %w", err)
+	}
+	defer writer.Close()
+
+	if _, err := io.Copy(writer, file); err != nil {
+		return ocispecs.Descriptor{}, fmt.Errorf("failed to copy tarball to content store: %w", err)
+	}
+
+	// Commit the tarball to the content store
+	if err := writer.Commit(ctx, size, digest); err != nil {
+		return ocispecs.Descriptor{}, fmt.Errorf("failed to commit tarball: %w", err)
+	}
+
+	return ocispecs.Descriptor{
+		MediaType: ocispecs.MediaTypeImageLayer,
+		Digest:    digest,
+		Size:      size,
+	}, nil
+}
+
+// writeImageConfig writes the image config to the content store
+func writeImageConfig(ctx context.Context, cs content.Store, config ocispecs.Image) (ocispecs.Descriptor, error) {
+	// Marshal the image config into JSON
+	data, err := json.Marshal(config)
+	if err != nil {
+		return ocispecs.Descriptor{}, fmt.Errorf("failed to marshal image config: %w", err)
+	}
+
+	// Calculate the digest of the image config
+	digest := digest.FromBytes(data)
+
+	// Create a unique reference for the content store writer
+	ref := fmt.Sprintf("config-%s", digest.String())
+
+	// Write the image config to the content store using the reference
+	writer, err := cs.Writer(ctx, content.WithRef(ref), content.WithDescriptor(ocispecs.Descriptor{
+		Digest: digest,
+		Size:   int64(len(data)),
+	}))
+	// Return if the content already exists
+	if err != nil {
+		if errdefs.IsAlreadyExists(err) {
+			return ocispecs.Descriptor{
+				MediaType: ocispecs.MediaTypeImageConfig,
+				Digest:    digest,
+				Size:      int64(len(data)),
+			}, nil
+		}
+		return ocispecs.Descriptor{}, fmt.Errorf("failed to create writer for config: %w", err)
+	}
+	defer writer.Close()
+
+	// Write the config data to the writer
+	if _, err := writer.Write(data); err != nil {
+		return ocispecs.Descriptor{}, fmt.Errorf("failed to write image config: %w", err)
+	}
+
+	// Commit the written config to the content store
+	if err := writer.Commit(ctx, int64(len(data)), digest); err != nil {
+		return ocispecs.Descriptor{}, fmt.Errorf("failed to commit image config: %w", err)
+	}
+
+	// Return the descriptor of the written config
+	return ocispecs.Descriptor{
+		MediaType: ocispecs.MediaTypeImageConfig,
+		Digest:    digest,
+		Size:      int64(len(data)),
+	}, nil
+}
+
+// writeManifest writes the OCI manifest to the content store
+func writeManifest(ctx context.Context, cs content.Store, manifest ocispecs.Manifest, labels map[string]string) (ocispecs.Descriptor, error) {
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		return ocispecs.Descriptor{}, fmt.Errorf("failed to marshal manifest: %w", err)
+	}
+
+	digest := digest.FromBytes(data)
+
+	// Create a unique reference for the content store writer
+	ref := fmt.Sprintf("manifest-%s", digest.String())
+
+	writer, err := cs.Writer(ctx, content.WithRef(ref), content.WithDescriptor(ocispecs.Descriptor{
+		Digest: digest,
+		Size:   int64(len(data)),
+	}))
+	// Return if the content already exists
+	if err != nil {
+		if errdefs.IsAlreadyExists(err) {
+			return ocispecs.Descriptor{
+				MediaType: ocispecs.MediaTypeImageManifest,
+				Digest:    digest,
+				Size:      int64(len(data)),
+			}, nil
+		}
+		return ocispecs.Descriptor{}, fmt.Errorf("failed to create writer for manifest: %w", err)
+	}
+	defer writer.Close()
+
+	if _, err := writer.Write(data); err != nil {
+		return ocispecs.Descriptor{}, fmt.Errorf("failed to write manifest: %w", err)
+	}
+
+	if err := writer.Commit(ctx, int64(len(data)), digest, content.WithLabels(labels)); err != nil {
+		return ocispecs.Descriptor{}, fmt.Errorf("failed to commit manifest: %w", err)
+	}
+
+	return ocispecs.Descriptor{
+		MediaType: ocispecs.MediaTypeImageManifest,
+		Digest:    digest,
+		Size:      int64(len(data)),
+	}, nil
+}
+
 // CtrCreateImage create an image in containerd's image store
 func (client *Client) CtrCreateImage(ctx context.Context, image images.Image) (images.Image, error) {
 	if err := client.verifyCtr(ctx, true); err != nil {
@@ -278,6 +593,16 @@ func (client *Client) CtrGetImage(ctx context.Context, reference string) (contai
 		return nil, err
 	}
 	return image, nil
+}
+
+func (client *Client) CtrImageExists(ctx context.Context, imageName string) (bool, error) {
+	_, err := client.CtrGetImage(ctx, imageName)
+	if errdefs.IsNotFound(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // CtrListImages returns a list of images object from ontainerd's image store
@@ -338,6 +663,63 @@ func (client *Client) CtrMountSnapshot(ctx context.Context, snapshotID, targetPa
 	return mounts[0].Mount(targetPath)
 }
 
+// CtrCreateSnapshotFromExistingRootfs creates a snapshot from an existing rootfs
+func (client *Client) CtrCreateSnapshotFromExistingRootfs(ctx context.Context, snapshotName, rootfsPath string) error {
+	if err := client.verifyCtr(ctx, true); err != nil {
+		return fmt.Errorf("CreateSnapshotFromExistingRootfs: exception while verifying ctrd client: %s", err.Error())
+	}
+
+	// Ensure the rootfs path exists
+	if _, err := os.Stat(rootfsPath); os.IsNotExist(err) {
+		return fmt.Errorf("rootfs path does not exist: %s", rootfsPath)
+	}
+
+	tmpSnapshotName := snapshotName + "-tmp"
+
+	snapshotter := client.ctrdClient.SnapshotService(defaultSnapshotter)
+
+	tmpSnapshotExists, err := client.CtrSnapshotExists(ctx, tmpSnapshotName)
+	if err != nil {
+		return fmt.Errorf("failed to check if tmp snapshot exists: %w", err)
+	}
+	if tmpSnapshotExists {
+		// existance of the temporary snapshot is a sign that the job was not finished properly
+		// so we remove it and start over
+		err = snapshotter.Remove(ctx, tmpSnapshotName)
+		if err != nil {
+			return fmt.Errorf("failed to remove existing snapshot: %w", err)
+		}
+	}
+
+	// Prepare a temporary directory for the snapshot
+	mounts, err := snapshotter.Prepare(ctx, tmpSnapshotName, "")
+	if err != nil {
+		return fmt.Errorf("failed to prepare snapshot: %w", err)
+	}
+
+	// Get the mount point path
+	mountPoint := mounts[0].Source
+
+	// Copy the contents of the existing rootfs to the new snapshot mount point
+	cmd := exec.Command("cp", "-a", rootfsPath+"/.", mountPoint)
+	err = cmd.Run()
+	if err != nil {
+		return fmt.Errorf("failed to copy rootfs: %w", err)
+	}
+
+	// Set the label to prevent the snapshot from being garbage collected
+	labels := map[string]string{"containerd.io/gc.root": time.Now().UTC().Format(time.RFC3339)}
+
+	// Commit the snapshot
+	err = snapshotter.Commit(ctx, snapshotName, tmpSnapshotName, snapshots.WithLabels(labels))
+	if err != nil {
+		return fmt.Errorf("failed to commit snapshot: %w", err)
+	}
+
+	fmt.Println("Snapshot prepared with rootfs")
+	return nil
+}
+
 // CtrListSnapshotInfo returns a list of all snapshot's info present in containerd's snapshot store.
 func (client *Client) CtrListSnapshotInfo(ctx context.Context) ([]snapshots.Info, error) {
 	if err := client.verifyCtr(ctx, true); err != nil {
@@ -352,6 +734,21 @@ func (client *Client) CtrListSnapshotInfo(ctx context.Context) ([]snapshots.Info
 		return nil, fmt.Errorf("CtrListSnapshotInfo: Exception while fetching snapshot list. %s", err.Error())
 	}
 	return snapshotInfoList, nil
+}
+
+func (client *Client) CtrSnapshotExists(ctx context.Context, snapshotName string) (bool, error) {
+	if err := client.verifyCtr(ctx, true); err != nil {
+		return false, err
+	}
+
+	snapshotter := client.ctrdClient.SnapshotService(defaultSnapshotter)
+	_, err := snapshotter.Stat(ctx, snapshotName)
+	if errdefs.IsNotFound(err) {
+		return false, nil
+	} else if err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // CtrGetSnapshotUsage returns snapshot's usage for snapshotID present in containerd's snapshot store
@@ -546,7 +943,7 @@ func (client *Client) CtrListTaskIds(ctx context.Context) ([]string, error) {
 }
 
 // CtrNewContainer starts a new container with a specific spec and specOpts
-func (client *Client) CtrNewContainer(ctx context.Context, spec specs.Spec, specOpts []oci.SpecOpts, name string, containerImage containerd.Image) (containerd.Container, error) {
+func (client *Client) CtrNewContainer(ctx context.Context, spec runtimespecs.Spec, specOpts []oci.SpecOpts, name string, containerImage containerd.Image) (containerd.Container, error) {
 
 	opts := []containerd.NewContainerOpts{
 		containerd.WithImage(containerImage),
@@ -560,13 +957,13 @@ func (client *Client) CtrNewContainer(ctx context.Context, spec specs.Spec, spec
 
 // CtrNewContainerWithPersist starts a new container with /persist mounted
 func (client *Client) CtrNewContainerWithPersist(ctx context.Context, name string, containerImage containerd.Image) (containerd.Container, error) {
-	var spec specs.Spec
+	var spec runtimespecs.Spec
 
-	spec.Root = &specs.Root{
+	spec.Root = &runtimespecs.Root{
 		Readonly: false,
 	}
 
-	mount := specs.Mount{
+	mount := runtimespecs.Mount{
 		Destination: "/persist",
 		Type:        "bind",
 		Source:      "/persist",
@@ -575,7 +972,7 @@ func (client *Client) CtrNewContainerWithPersist(ctx context.Context, name strin
 	specOpts := []oci.SpecOpts{
 		oci.WithDefaultSpec(),
 		oci.WithImageConfig(containerImage),
-		oci.WithMounts([]specs.Mount{mount}),
+		oci.WithMounts([]runtimespecs.Mount{mount}),
 		oci.WithDefaultUnixDevices,
 	}
 
@@ -846,8 +1243,8 @@ func prepareProcess(pid int, VifList []types.VifInfo) error {
 	return nil
 }
 
-func getSavedImageInfo(containerPath string) (ocispec.Image, error) {
-	var image ocispec.Image
+func getSavedImageInfo(containerPath string) (ocispecs.Image, error) {
+	var image ocispecs.Image
 
 	data, err := os.ReadFile(filepath.Join(containerPath, imageConfigFilename))
 	if err != nil {

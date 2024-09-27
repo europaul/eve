@@ -338,3 +338,28 @@ func (ctx ctrdContext) VirtualTPMTerminate(domainName string) error {
 func (ctx ctrdContext) VirtualTPMTeardown(domainName string) error {
 	return fmt.Errorf("not implemented")
 }
+
+func (ctx ctrdContext) createXenToolsImage() error {
+	ctrdUserCtx, done, err := ctx.ctrdClient.CtrNewUserServicesCtxWithLease()
+	if err != nil {
+		return fmt.Errorf("couldn't create user context with lease: %v.", err)
+	}
+	defer done()
+
+	// check if the image xen-tools is available
+	imageExists, err := ctx.ctrdClient.CtrImageExists(ctrdUserCtx, "xen-tools:local")
+	if err != nil {
+		return fmt.Errorf("couldn't check if image xen-tools exists: %v.", err)
+	}
+	if imageExists {
+		logrus.Infof("image xen-tools already exists")
+		return nil
+	}
+	// Create a xen-tools image if it does not exist
+	err = ctx.ctrdClient.CtrCreateImageFromRootfs(ctrdUserCtx, "xen-tools:local", "/containers/services/xen-tools/rootfs")
+	if err != nil {
+		return fmt.Errorf("couldn't create image xen-tools: %v.", err)
+	}
+	logrus.Infof("created image xen-tools")
+	return nil
+}

@@ -106,6 +106,13 @@ func newXen() Hypervisor {
 		logrus.Fatalf("couldn't initialize containerd (this should not happen): %v. Exiting.", err)
 		return nil // it really never returns on account of above
 	}
+
+	err = ctrdCtx.createXenToolsImage()
+	if err != nil {
+		logrus.Fatalf("couldn't create xen-tools image: %v. Exiting.", err)
+		return nil // it really never returns on account of above
+	}
+
 	return xenContext{ctrdContext: *ctrdCtx}
 }
 
