@@ -561,3 +561,95 @@ func TestGoroutineMonitorRunsFineUnstoppable(t *testing.T) {
 	}
 
 }
+
+func eatMemory(cancelCh chan struct{}) {
+	allocatedChunks := make([][]byte, 0)
+	for {
+		select {
+		case <-cancelCh:
+			return
+		default:
+			chunk := make([]byte, os.Getpagesize())
+			allocatedChunks = append(allocatedChunks, chunk)
+			time.Sleep(1 * time.Millisecond)
+		}
+	}
+}
+
+func TestMemoryLeakDetectorStarts(t *testing.T) {
+	backupOut := logger.Out
+	backupLevel := logger.Level
+	// Create a pipe to capture log output
+	r, w, _ := os.Pipe()
+	logger.SetOutput(w)
+	logger.SetLevel(logrus.TraceLevel)
+	defer func() {
+		logger.SetOutput(backupOut)
+		logger.SetLevel(backupLevel)
+	}()
+
+	interval := 100 * time.Millisecond
+	sampleSize := 5
+	threshold := 1000.0
+
+	stopCh := MemoryLeakDetector(interval, sampleSize, threshold)
+	defer close(stopCh)
+
+	// Let it collect some samples
+	time.Sleep(interval * 3)
+
+	// Close the pipe
+	_ = w.Close()
+
+	// Read the log output
+	output, _ := io.ReadAll(r)
+
+	msgStart := "Starting memory leak detector"
+	if !strings.Contains(string(output), msgStart) {
+		t.Errorf("Expected log output to contain '%s'", msgStart)
+	}
+}
+
+func TestMemoryLeakDetectorDetects(t *testing.T) {
+	backupOut := logger.Out
+	backupLevel := logger.Level
+	// Create a pipe to capture log output
+	r, w, _ := os.Pipe()
+	logger.SetOutput(w)
+	logger.SetLevel(logrus.TraceLevel)
+	defer func() {
+		logger.SetOutput(backupOut)
+		logger.SetLevel(backupLevel)
+	}()
+
+	interval := 100 * time.Millisecond
+	sampleSize := 5
+	threshold := 1000.0
+
+	stopCh := MemoryLeakDetector(interval, sampleSize, threshold)
+	defer close(stopCh)
+
+	memLeakCh := make(chan struct{})
+	go eatMemory(memLeakCh)
+
+	// Let it collect some samples
+	time.Sleep(interval * 100)
+
+	memLeakCh <- struct{}{}
+
+	// Close the pipe
+	_ = w.Close()
+	// Read the log output
+	output, _ := io.ReadAll(r)
+
+	msgLeak := "Potential memory leak detected"
+	for _, msg := range []string{msgLeak} {
+		if !strings.Contains(string(output), msg) {
+			t.Errorf("Expected log output to contain '%s'", msg)
+			t.Logf("Output: %s", string(output))
+		}
+	}
+
+	t.Logf("Output: %s", string(output))
+
+}

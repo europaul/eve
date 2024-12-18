@@ -552,6 +552,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 
 	go goroutinesMonitor(&ctx)
 
+	_ = MemoryLeakDetector(5*time.Second, 12, 1000.0)
 	for {
 		select {
 		case change := <-subGlobalConfig.MsgChan():
