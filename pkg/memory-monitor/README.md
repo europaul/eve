@@ -331,7 +331,7 @@ allocations. To do this, you can run the following command:
 
 ```shell
 $ go tool pprof -source_path ../ -trim_path / -http=:8080 -call_tree -nodefraction=0 -lines /path/to/zedbox /path/to/output/<event_timestamp>/heap_pillar.out
-```
+``` 
 
 ## Configuration of the memory monitor
 
