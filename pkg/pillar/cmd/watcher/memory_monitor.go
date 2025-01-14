@@ -11,6 +11,13 @@ import (
 	"time"
 )
 
+var (
+	// MemLeakMinimumInterval is the minimum time interval on which we can detect a memory leak
+	MemLeakMinimumInterval = 10 * time.Minute
+	// SmoothInterval is the window size for the median filter to reduce spikes
+	SmoothInterval = 10 * time.Second
+)
+
 // medianFilter applies a median filter to a slice of values. windowSize should be odd.
 // This reduces the impact of local spikes.
 func medianFilter(values []float64, windowSize int) []float64 {
@@ -75,6 +82,9 @@ func MemoryLeakDetector(interval time.Duration, sampleSize int, threshold float6
 		var heapValues []float64
 		var RSSValues []float64
 
+		smoothWindowSize := int(SmoothInterval / interval)
+		minimalSampleSize := int(MemLeakMinimumInterval / interval)
+
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
@@ -109,10 +119,10 @@ func MemoryLeakDetector(interval time.Duration, sampleSize int, threshold float6
 				}
 
 				// Only run regression if we have enough samples
-				if len(times) > 2 {
+				if len(times) > minimalSampleSize {
 					// Smooth the values via a median filter to reduce spikes
-					smoothedHeapValues := medianFilter(heapValues, 3) // window size = 3
-					smoothedRSSValues := medianFilter(RSSValues, 3)   // window size = 3
+					smoothedHeapValues := medianFilter(heapValues, smoothWindowSize)
+					smoothedRSSValues := medianFilter(RSSValues, smoothWindowSize)
 					heapSlope := linearRegressionSlope(times, smoothedHeapValues)
 					RSSSlope := linearRegressionSlope(times, smoothedRSSValues)
 					// If slope is positive and above a certain threshold, print a warning
