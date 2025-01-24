@@ -2,6 +2,7 @@ import argparse
 import os
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # The CVS file should have the following columns:
 # time, memory_usage, red_dot
@@ -26,11 +27,16 @@ def main():
     df_heap = pd.read_csv(args.heap_file)
     df_rss = pd.read_csv(args.rss_file)
 
-    fig = go.Figure()
+    fig = make_subplots(rows=1, cols=1)
 
     # Add the main line with all the usage data
-    fig.add_trace(go.Scatter(x=df_heap['time'], y=df_heap['memory_usage'],
-                             mode='lines', name='Memory Usage'))
+    fig.add_trace(go.Scatter(
+        x=df_heap['time'],
+        y=df_heap['memory_usage'],
+        mode='lines',
+        name='Memory Usage',
+        line=dict(color='lightblue', width=2)
+    ), row=1, col=1)
 
     # Add the red circles around the points with red_dot=true
     red_dot = df_heap[df_heap['red_dot'] == True]
@@ -38,16 +44,42 @@ def main():
         x=red_dot['time'],
         y=red_dot['memory_usage'],
         mode='markers',
-        marker=dict(color='red', symbol='circle', size=10),
-        name='Detector Triggered'))
+        marker=dict(color='red', symbol='circle', size=2),
+        name='Detector Triggered'), row=1, col=1)
 
     # Add the main line with RSS data from the RSS file
     fig.add_trace(go.Scatter(
         x=df_rss['time'],
         y=df_rss['memory_usage'],
         mode='lines',
-        name='RSS'))
+        name='RSS',
+        line=dict(color='lightgreen', width=2)
+    ), row=1, col=1)
 
+    def update_smoothed_data(window_size):
+        df_heap['smoothed'] = df_heap['memory_usage'].rolling(window=window_size,
+                                                              center=True).median()
+        df_rss['smoothed'] = df_rss['memory_usage'].rolling(window=window_size,
+                                                            center=True).median()
+        return [df_heap['smoothed'], df_rss['smoothed']]
+
+    # Initialize smoothed data with window size 10
+    smoothed_data = update_smoothed_data(10)
+
+    fig.add_trace(go.Scatter(
+        x=df_heap['time'],
+        y=smoothed_data[0],
+        mode='lines',
+        name='Smoothed Heap',
+        line=dict(color='black', width=1)
+    ), row=1, col=1)
+    fig.add_trace(go.Scatter(
+        x=df_rss['time'],
+        y=smoothed_data[1],
+        mode='lines',
+        name='Smoothed RSS',
+        line=dict(color='black', width=1)
+    ), row=1, col=1)
 
     # Add buttons to switch between Bytes and Megabytes
     fig.update_layout(
@@ -66,12 +98,19 @@ def main():
                                }],
                         label='Megabytes',
                         method='restyle'
-                    )
+                    ),
                 ]),
                 direction='down',
                 showactive=True,
             ),
-        ]
+        ],
+        sliders=[{
+            'steps': [
+                {'method': 'restyle', 'label' : str(i), 'args': [{'y': update_smoothed_data(i)}, [3, 4]]}
+                for i in range(10, 200, 20)
+            ],
+            'currentvalue': {'prefix': 'Window size: '},
+        }],
     )
 
     fig.show()
