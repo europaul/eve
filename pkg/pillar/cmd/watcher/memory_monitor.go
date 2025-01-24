@@ -4,13 +4,10 @@
 package watcher
 
 import (
+	"encoding/csv"
 	"fmt"
 	"github.com/lf-edge/eve/pkg/pillar/types"
 	"gonum.org/v1/gonum/stat"
-	"gonum.org/v1/plot"
-	"gonum.org/v1/plot/plotter"
-	"gonum.org/v1/plot/vg"
-	"image/color"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -70,64 +67,67 @@ func getRSS() (int64, error) {
 	return rss * pageSize, nil
 }
 
-func plotMemoryUsage(times, memUsage []float64, redDots []bool, filename string) {
-	// Plot memory usage
-	if len(times) != len(memUsage) {
-		log.Errorf("Mismatched times and memory usage\n")
-		return
-	}
-	// Create a new plot
-	p := plot.New()
-	p.Title.Text = "Memory Usage"
-	p.X.Label.Text = "Time (s)"
-	p.Y.Label.Text = "Memory Usage (bytes)"
-	// Create a new line plot
-	pts := make(plotter.XYs, len(times))
-	redPts := make(plotter.XYs, 0)
-	for i := range times {
-		pts[i].X = times[i]
-		pts[i].Y = memUsage[i]
-		// if it's a red dot, make it red
-		if redDots[i] {
-			redPts = append(redPts, pts[i])
-		}
-	}
-
-	line, err := plotter.NewLine(pts)
-	if err != nil {
-		log.Errorf("Failed to create line plot: %v\n", err)
+// writeMemoryUsage writes out times, memUsage, and redDots as CSV.
+// There's no repeated field name, so it's smaller than typical JSON.
+// Then you can load this CSV in any interactive plotting tool.
+func writeMemoryUsage(times, memUsage []float64, redDots []bool, filename string) {
+	// Basic checks
+	if len(times) != len(memUsage) || len(times) != len(redDots) {
+		fmt.Printf("Mismatched slice lengths!\n")
 		return
 	}
 
-	p.Add(line)
-
-	if len(redPts) > 0 {
-		scatter, err := plotter.NewScatter(redPts)
-		if err != nil {
-			log.Errorf("Failed to create scatter plot: %v\n", err)
-			return
-		}
-		scatter.GlyphStyle.Color = color.RGBA{R: 255, A: 255}
-		p.Add(scatter)
-	}
-
-	// Get a full path for the filename
-	filename = filepath.Join(types.MemoryMonitorOutputDir, filename)
+	// Full path to output file
+	outPath := filepath.Join(types.MemoryMonitorOutputDir, filename)
 
 	// If file exists, remove it
-	if _, err := os.Stat(filename); err == nil {
-		if err := os.Remove(filename); err != nil {
-			log.Errorf("Failed to remove existing file: %v\n", err)
+	if _, err := os.Stat(outPath); err == nil {
+		if err := os.Remove(outPath); err != nil {
+			fmt.Printf("Failed to remove existing file: %v\n", err)
 			return
 		}
 	}
 
-	// Find the maximum value to set the Y axis limit
+	// Create a new CSV file
+	file, err := os.Create(outPath)
+	if err != nil {
+		fmt.Printf("Error creating file: %v\n", err)
+		return
+	}
+	defer file.Close()
 
-	if err := p.Save(40*vg.Inch, 20*vg.Inch, filename); err != nil {
-		log.Errorf("Failed to save plot: %v\n", err)
+	w := csv.NewWriter(file)
+
+	// Optional: write a header row
+	// Omit if you want absolutely minimal output,
+	// but usually a header is still helpful
+	header := []string{"time", "memory_usage", "red_dot"}
+	if err := w.Write(header); err != nil {
+		fmt.Printf("Error writing CSV header: %v\n", err)
+		return
 	}
 
+	// Write each row
+	for i := range times {
+		row := []string{
+			fmt.Sprintf("%f", times[i]),      // time
+			fmt.Sprintf("%.0f", memUsage[i]), // memory usage
+			fmt.Sprintf("%t", redDots[i]),    // red_dot: true/false
+		}
+		if err := w.Write(row); err != nil {
+			fmt.Printf("Error writing row: %v\n", err)
+			return
+		}
+	}
+
+	// Flush any buffered data to disk
+	w.Flush()
+	if err := w.Error(); err != nil {
+		fmt.Printf("Error flushing CSV writer: %v\n", err)
+		return
+	}
+
+	fmt.Printf("Data exported to %s\n", outPath)
 }
 
 // This goroutine periodically captures memory usage stats and attempts to detect
@@ -200,13 +200,15 @@ func MemoryLeakDetector(interval time.Duration, sampleSize int, threshold float6
 					if heapSlope > threshold {
 						log.Tracef("Potential heap memory leak detected: slope %.2f > %.2f\n", heapSlope, threshold)
 						log.Warnf("Potential heap memory leak detected: slope %.2f > %.2f\n", heapSlope, threshold)
-						plotMemoryUsage(times, heapValues, redDots, "heap_usage.png")
+						writeMemoryUsage(times, heapValues, redDots, "heap_usage.csv")
+						writeMemoryUsage(times, smoothedHeapValues, redDots, "smoothed_heap_usage.csv")
 						redDots[len(redDots)-1] = true
 					}
 					if RSSSlope > threshold {
 						log.Tracef("Potential RSS memory leak detected: slope %.2f > %.2f\n", RSSSlope, threshold)
 						log.Warnf("Potential RSS memory leak detected: slope %.2f > %.2f\n", RSSSlope, threshold)
-						plotMemoryUsage(times, RSSValues, redDots, "RSS_usage.png")
+						writeMemoryUsage(times, RSSValues, redDots, "RSS_usage.csv")
+						writeMemoryUsage(times, smoothedRSSValues, redDots, "smoothed_RSS_usage.csv")
 						redDots[len(redDots)-1] = true
 					}
 				}
