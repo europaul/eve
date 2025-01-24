@@ -5,7 +5,14 @@ package watcher
 
 import (
 	"fmt"
+	"github.com/lf-edge/eve/pkg/pillar/types"
+	"gonum.org/v1/gonum/stat"
+	"gonum.org/v1/plot"
+	"gonum.org/v1/plot/plotter"
+	"gonum.org/v1/plot/vg"
+	"image/color"
 	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"time"
@@ -63,6 +70,66 @@ func getRSS() (int64, error) {
 	return rss * pageSize, nil
 }
 
+func plotMemoryUsage(times, memUsage []float64, redDots []bool, filename string) {
+	// Plot memory usage
+	if len(times) != len(memUsage) {
+		log.Errorf("Mismatched times and memory usage\n")
+		return
+	}
+	// Create a new plot
+	p := plot.New()
+	p.Title.Text = "Memory Usage"
+	p.X.Label.Text = "Time (s)"
+	p.Y.Label.Text = "Memory Usage (bytes)"
+	// Create a new line plot
+	pts := make(plotter.XYs, len(times))
+	redPts := make(plotter.XYs, 0)
+	for i := range times {
+		pts[i].X = times[i]
+		pts[i].Y = memUsage[i]
+		// if it's a red dot, make it red
+		if redDots[i] {
+			redPts = append(redPts, pts[i])
+		}
+	}
+
+	line, err := plotter.NewLine(pts)
+	if err != nil {
+		log.Errorf("Failed to create line plot: %v\n", err)
+		return
+	}
+
+	p.Add(line)
+
+	if len(redPts) > 0 {
+		scatter, err := plotter.NewScatter(redPts)
+		if err != nil {
+			log.Errorf("Failed to create scatter plot: %v\n", err)
+			return
+		}
+		scatter.GlyphStyle.Color = color.RGBA{R: 255, A: 255}
+		p.Add(scatter)
+	}
+
+	// Get a full path for the filename
+	filename = filepath.Join(types.MemoryMonitorOutputDir, filename)
+
+	// If file exists, remove it
+	if _, err := os.Stat(filename); err == nil {
+		if err := os.Remove(filename); err != nil {
+			log.Errorf("Failed to remove existing file: %v\n", err)
+			return
+		}
+	}
+
+	// Find the maximum value to set the Y axis limit
+
+	if err := p.Save(40*vg.Inch, 20*vg.Inch, filename); err != nil {
+		log.Errorf("Failed to save plot: %v\n", err)
+	}
+
+}
+
 // This goroutine periodically captures memory usage stats and attempts to detect
 // a potential memory leak by looking at the trend of heap usage over time. It uses a
 // simple linear regression to estimate whether heap memory usage is consistently rising.
@@ -81,6 +148,7 @@ func MemoryLeakDetector(interval time.Duration, sampleSize int, threshold float6
 		var times []float64
 		var heapValues []float64
 		var RSSValues []float64
+		var redDots []bool
 
 		smoothWindowSize := int(SmoothInterval / interval)
 		minimalSampleSize := int(MemLeakMinimumInterval / interval)
@@ -110,16 +178,19 @@ func MemoryLeakDetector(interval time.Duration, sampleSize int, threshold float6
 				times = append(times, elapsed)
 				heapValues = append(heapValues, heapInUse)
 				RSSValues = append(RSSValues, float64(rss))
+				redDots = append(redDots, false)
 
 				// Keep only the last 'sampleSize' samples
 				if len(times) > sampleSize {
 					times = times[len(times)-sampleSize:]
 					heapValues = heapValues[len(heapValues)-sampleSize:]
 					RSSValues = RSSValues[len(RSSValues)-sampleSize:]
+					redDots = redDots[len(redDots)-sampleSize:]
 				}
 
 				// Only run regression if we have enough samples
 				if len(times) > minimalSampleSize {
+					// Get a timestamp for the filename
 					// Smooth the values via a median filter to reduce spikes
 					smoothedHeapValues := medianFilter(heapValues, smoothWindowSize)
 					smoothedRSSValues := medianFilter(RSSValues, smoothWindowSize)
@@ -127,10 +198,16 @@ func MemoryLeakDetector(interval time.Duration, sampleSize int, threshold float6
 					RSSSlope := linearRegressionSlope(times, smoothedRSSValues)
 					// If slope is positive and above a certain threshold, print a warning
 					if heapSlope > threshold {
-						log.Tracef("Potential memory leak detected: slope %.2f > %.2f\n", heapSlope, threshold)
+						log.Tracef("Potential heap memory leak detected: slope %.2f > %.2f\n", heapSlope, threshold)
+						log.Warnf("Potential heap memory leak detected: slope %.2f > %.2f\n", heapSlope, threshold)
+						plotMemoryUsage(times, heapValues, redDots, "heap_usage.png")
+						redDots[len(redDots)-1] = true
 					}
 					if RSSSlope > threshold {
 						log.Tracef("Potential RSS memory leak detected: slope %.2f > %.2f\n", RSSSlope, threshold)
+						log.Warnf("Potential RSS memory leak detected: slope %.2f > %.2f\n", RSSSlope, threshold)
+						plotMemoryUsage(times, RSSValues, redDots, "RSS_usage.png")
+						redDots[len(redDots)-1] = true
 					}
 				}
 			}
@@ -139,36 +216,14 @@ func MemoryLeakDetector(interval time.Duration, sampleSize int, threshold float6
 	return stopCh
 }
 
-// linearRegressionSlope calculates the slope (m) of the best-fit line for the given data points.
-// Using the formula for simple linear regression with one independent variable.
-// slope = sum((x - meanX)*(y - meanY)) / sum((x - meanX)^2)
+// linearRegressionSlope calculates the slope (beta) via Gonum's LinearRegression.
 func linearRegressionSlope(xs, ys []float64) float64 {
-	if len(xs) != len(ys) {
-		return 0.0
+	// Basic sanity check
+	if len(xs) != len(ys) || len(xs) < 2 {
+		return 0
 	}
-	n := float64(len(xs))
-	var sumX, sumY, sumXY, sumX2 float64
-	for i := 0; i < len(xs); i++ {
-		sumX += xs[i]
-		sumY += ys[i]
-		sumXY += xs[i] * ys[i]
-		sumX2 += xs[i] * xs[i]
-	}
-
-	meanX := sumX / n
-	meanY := sumY / n
-
-	numerator := 0.0
-	denominator := 0.0
-	for i := 0; i < len(xs); i++ {
-		xDiff := xs[i] - meanX
-		yDiff := ys[i] - meanY
-		numerator += xDiff * yDiff
-		denominator += xDiff * xDiff
-	}
-
-	if denominator == 0 {
-		return 0.0
-	}
-	return numerator / denominator
+	// LinearRegression returns (alpha, beta)
+	alpha, beta := stat.LinearRegression(xs, ys, nil, false)
+	_ = alpha // We only need slope in this case
+	return beta
 }
