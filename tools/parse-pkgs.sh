@@ -113,6 +113,8 @@ ACRN_KERNEL_TAG=${ACRN_KERNEL_TAG}
 KERNEL_TAG=${KERNEL_TAG}
 FW_TAG=${FW_TAG}
 XENTOOLS_TAG=${XENTOOLS_TAG}
+VMAGENT_TAG=${VMAGENT_TAG}
+NODE_EXPORTER_TAG=${NODE_EXPORTER_TAG}
 DOM0ZTOOLS_TAG=${DOM0ZTOOLS_TAG}
 RNGD_TAG=${RNGD_TAG}
 XEN_TAG=${XEN_TAG}
@@ -173,6 +175,8 @@ fi
 
 ACRN_KERNEL_TAG=$(linuxkit_tag pkg/acrn-kernel)
 FW_TAG=$(linuxkit_tag pkg/fw)
+VMAGENT_TAG=$(linuxkit_tag pkg/vmagent)
+NODE_EXPORTER_TAG=$(linuxkit_tag pkg/node-exporter)
 XENTOOLS_TAG=$(linuxkit_tag pkg/xen-tools)
 XEN_TAG=$(linuxkit_tag pkg/xen)
 ACRN_TAG=$(linuxkit_tag pkg/acrn)
