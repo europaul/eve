@@ -3,4 +3,10 @@ FROM victoriametrics/vmagent:latest
 # Copy your local vmagent config into the container
 COPY etc/vmagent.yml /etc/vmagent.yml
 
-CMD ["-promscrape.config=/etc/vmagent.yml", "-remoteWrite.url=http://localhost:8428/api/v1/write"]
+# Copy the run.sh script into the container
+COPY run.sh /run.sh
+
+# Make the run.sh script executable
+RUN chmod +x /run.sh
+
+ENTRYPOINT ["/run.sh"]

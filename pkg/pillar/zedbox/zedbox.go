@@ -33,6 +33,7 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/cmd/nim"
 	"github.com/lf-edge/eve/pkg/pillar/cmd/nodeagent"
 	"github.com/lf-edge/eve/pkg/pillar/cmd/pbuf"
+	"github.com/lf-edge/eve/pkg/pillar/cmd/proxy"
 	"github.com/lf-edge/eve/pkg/pillar/cmd/tpmmgr"
 	"github.com/lf-edge/eve/pkg/pillar/cmd/upgradeconverter"
 	"github.com/lf-edge/eve/pkg/pillar/cmd/usbmanager"
@@ -111,6 +112,7 @@ var (
 		"usbmanager":       {f: usbmanager.Run},
 		"vcomlink":         {f: vcomlink.Run},
 		"monitor":          {f: monitor.Run},
+		"proxy":            {f: proxy.Run},
 	}
 	logger *logrus.Logger
 	log    *base.LogObject

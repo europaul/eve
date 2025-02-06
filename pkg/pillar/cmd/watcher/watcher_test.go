@@ -592,7 +592,7 @@ func TestMemoryLeakDetectorStarts(t *testing.T) {
 	sampleSize := 5
 	threshold := 1000.0
 
-	stopCh := MemoryLeakDetector(interval, sampleSize, threshold)
+	stopCh := MemoryMonitor(interval, sampleSize, threshold)
 	defer close(stopCh)
 
 	// Let it collect some samples
@@ -626,7 +626,7 @@ func TestMemoryLeakDetectorDetects(t *testing.T) {
 	sampleSize := 5
 	threshold := 1000.0
 
-	stopCh := MemoryLeakDetector(interval, sampleSize, threshold)
+	stopCh := MemoryMonitor(interval, sampleSize, threshold)
 	defer close(stopCh)
 
 	memLeakCh := make(chan struct{})

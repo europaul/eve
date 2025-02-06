@@ -554,11 +554,11 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 
 	var (
 		memLeakDetectorInterval  = 5 * time.Second
-		memLeakDetectorSamples   = int(24 * time.Hour / memLeakDetectorInterval)
+		memLeakDetectorSamples   = int(4 * 24 * time.Hour / memLeakDetectorInterval)
 		memLeakDetectorThreshold = 1000.0
 	)
 
-	_ = MemoryLeakDetector(memLeakDetectorInterval, memLeakDetectorSamples, memLeakDetectorThreshold)
+	_ = MemoryMonitor(memLeakDetectorInterval, memLeakDetectorSamples, memLeakDetectorThreshold)
 	for {
 		select {
 		case change := <-subGlobalConfig.MsgChan():

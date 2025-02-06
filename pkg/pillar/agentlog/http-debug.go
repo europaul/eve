@@ -7,6 +7,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"github.com/lf-edge/eve/pkg/pillar/types"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"io"
 	"math/rand"
 	"net/http"
@@ -346,6 +349,69 @@ func linuxkitYmlHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, "/hostfs/etc/linuxkit-eve-config.yml")
 }
 
+func getRSS() (uint64, error) {
+	data, err := os.ReadFile("/proc/self/statm")
+	if err != nil {
+		return 0, err
+	}
+	var size, rss uint64
+	if _, err := fmt.Sscanf(string(data), "%d %d", &size, &rss); err != nil {
+		return 0, err
+	}
+	pageSize := uint64(os.Getpagesize())
+	return rss * pageSize, nil
+}
+
+// Define Prometheus metrics
+var (
+	memAlloc = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "pillar",
+		Name:      "go_mem_alloc_bytes",
+		Help:      "Currently allocated heap memory.",
+	})
+	memSys = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "pillar",
+		Name:      "go_mem_sys_bytes",
+		Help:      "Total memory requested from OS.",
+	})
+	heapAlloc = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "pillar",
+		Name:      "go_mem_heap_alloc_bytes",
+		Help:      "Heap memory actively used by Go objects.",
+	})
+	heapSys = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "pillar",
+		Name:      "go_mem_heap_sys_bytes",
+		Help:      "Total heap memory reserved from the OS.",
+	})
+	heapIdle = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "pillar",
+		Name:      "go_mem_heap_idle_bytes",
+		Help:      "Heap memory not currently used but still reserved.",
+	})
+	heapReleased = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "pillar",
+		Name:      "go_mem_heap_released_bytes",
+		Help:      "Heap memory returned to the OS.",
+	})
+	numGC = prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "pillar",
+		Name:      "go_mem_num_gc",
+		Help:      "Number of completed GC cycles.",
+	})
+	rss = prometheus.NewGauge(prometheus.GaugeOpts{
+		Namespace: "pillar",
+		Name:      "rss_bytes",
+		Help:      "Resident Set Size of the process.",
+	})
+)
+
+var (
+	vmagentPersistDir = types.PersistDir + "/vmagent"
+)
+
+var localNumGC uint32
+
 // ListenDebug starts an HTTP server on localhost:6543 that provides various debugging capabilities.
 // It sets up several endpoints for profiling, memory monitoring, and stack dumping.
 // The server can only be started once and will run until a POST request is made to the /stop endpoint.
@@ -357,6 +423,39 @@ func ListenDebug(log *base.LogObject, stacksDumpFileName, memDumpFileName string
 	}
 
 	mux := http.NewServeMux()
+
+	// Add Prometheus metrics to your existing debug server
+	prometheus.MustRegister(memAlloc, memSys, heapAlloc, heapSys, heapIdle, heapReleased, numGC, rss)
+
+	promHandler := promhttp.Handler()
+
+	metricsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Create the vmagent persist directory, if it does not exist
+		if _, err := os.Stat(vmagentPersistDir); os.IsNotExist(err) {
+			if err := os.MkdirAll(vmagentPersistDir, 0755); err != nil {
+				log.Errorf("Failed to create %s: %+v", vmagentPersistDir, err)
+			}
+		}
+		// On-demand: read the latest MemStats and update your gauges right now.
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
+		memAlloc.Set(float64(m.Alloc))
+		memSys.Set(float64(m.Sys))
+		heapAlloc.Set(float64(m.HeapAlloc))
+		heapSys.Set(float64(m.HeapSys))
+		heapIdle.Set(float64(m.HeapIdle))
+		heapReleased.Set(float64(m.HeapReleased))
+		numGC.Add(float64(m.NumGC - localNumGC))
+		localNumGC = m.NumGC
+		rssBytes, err := getRSS()
+		if err != nil {
+			log.Errorf("Failed to get RSS: %+v", err)
+		} else {
+			rss.Set(float64(rssBytes))
+		}
+		// Now pass the request on to the real handler:
+		promHandler.ServeHTTP(w, r)
+	})
 
 	server := &http.Server{
 		Addr:              listenAddress,
@@ -501,6 +600,7 @@ func ListenDebug(log *base.LogObject, stacksDumpFileName, memDumpFileName string
 			return
 		}
 	}))
+	mux.Handle("/metrics", metricsHandler)
 
 	if err := server.ListenAndServe(); err != nil {
 		log.Errorf("Listening failed: %+v", err)

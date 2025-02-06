@@ -55,7 +55,6 @@ require (
 	golang.org/x/net v0.25.0
 	golang.org/x/sys v0.28.0
 	gonum.org/v1/gonum v0.11.0
-	gonum.org/v1/plot v0.10.1
 	google.golang.org/grpc v1.61.0
 	google.golang.org/protobuf v1.33.0
 	gopkg.in/yaml.v2 v2.4.0
@@ -156,7 +155,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pkg/sftp v1.13.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/prometheus/client_golang v1.18.0 // indirect
+	github.com/prometheus/client_golang v1.18.0
 	github.com/prometheus/client_model v0.5.0 // indirect
 	github.com/prometheus/common v0.46.0 // indirect
 	github.com/robertkrimen/otto v0.0.0-20221011175642-09fc211e5ab1 // indirect
@@ -197,16 +196,10 @@ require (
 )
 
 require (
-	git.sr.ht/~sbinet/gg v0.3.1 // indirect
-	github.com/ajstarks/svgo v0.0.0-20211024235047-1546f124cd8b // indirect
 	github.com/bicomsystems/go-libzfs v0.4.0 // indirect
-	github.com/go-fonts/liberation v0.2.0 // indirect
 	github.com/go-kit/kit v0.13.0 // indirect
 	github.com/go-kit/log v0.2.1 // indirect
-	github.com/go-latex/latex v0.0.0-20210823091927-c0d11ff05a81 // indirect
 	github.com/go-logfmt/logfmt v0.6.0 // indirect
-	github.com/go-pdf/fpdf v0.6.0 // indirect
-	github.com/golang/freetype v0.0.0-20170609003504-e2365dfdc4a0 // indirect
 	github.com/golang/glog v1.1.2 // indirect
 	github.com/golang/mock v1.6.0 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
@@ -222,7 +215,6 @@ require (
 	github.com/pborman/uuid v1.2.1 // indirect
 	github.com/prometheus-operator/prometheus-operator/pkg/apis/monitoring v0.68.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	golang.org/x/image v0.0.0-20220302094943-723b81ca9867 // indirect
 	k8s.io/apiextensions-apiserver v0.28.1 // indirect
 	k8s.io/klog/v2 v2.110.1 // indirect
 	k8s.io/kube-openapi v0.0.0-20231010175941-2dd684a91f00 // indirect

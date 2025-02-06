@@ -9,3 +9,4 @@ config:
     - /run:/run
     - /etc/resolv.conf:/etc/resolv.conf
     - /persist:/persist
+    - /config:/config:ro
