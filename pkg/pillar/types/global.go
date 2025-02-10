@@ -989,7 +989,7 @@ func NewConfigItemSpecMap() ConfigItemSpecMap {
 	configItemSpecMap.AddBoolItem(EnableARPSnoop, true)
 	configItemSpecMap.AddBoolItem(WwanQueryVisibleProviders, false)
 	configItemSpecMap.AddBoolItem(NetworkLocalLegacyMACAddress, false)
-	configItemSpecMap.AddBoolItem(MemoryMonitorDisabled, false)
+	configItemSpecMap.AddBoolItem(MemoryMonitorDisabled, true)
 
 	// Add TriState Items
 	configItemSpecMap.AddTriStateItem(NetworkFallbackAnyEth, TS_DISABLED)
