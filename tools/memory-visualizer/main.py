@@ -18,10 +18,10 @@ def main():
         return
     # Check if file exists
     if not os.path.isfile(args.heap_file):
-        print(f"Heap file '{args.file}' does not exist")
+        print(f"Heap file '{args.heap_file}' does not exist")
         return
     if not os.path.isfile(args.rss_file):
-        print(f"RSS file '{args.file}' does not exist")
+        print(f"RSS file '{args.rss_file}' does not exist")
         return
 
     df_heap = pd.read_csv(args.heap_file)

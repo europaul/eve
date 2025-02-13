@@ -96,8 +96,10 @@ func controlFileSize(filename string, threshold int64) {
 			return
 		}
 
+		fileDir := filepath.Dir(filename)
+
 		// Create a temporary output file
-		tmp, err := os.CreateTemp("", "truncated-*.csv")
+		tmp, err := os.CreateTemp(fileDir, "truncated-*.csv")
 		if err != nil {
 			log.Warnf("failed to create temp file: %v", err)
 			file.Close()
@@ -221,7 +223,7 @@ func writeMemoryUsage(timeNow time.Time, memUsage uint64, outPath string) {
 		fmt.Printf("Error opening file: %v\n", err)
 		return
 	}
-	defer controlFileSize(outPath, 1024)
+	defer controlFileSize(outPath, 1024*1024) // 1MB
 	defer file.Close()
 
 	w := csv.NewWriter(file)

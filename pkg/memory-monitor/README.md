@@ -188,7 +188,7 @@ enable the memory monitor back, by setting it to `false`.
 
 An ability to disable the memory monitor is useful when there is a suspicion
 that the memory monitor itself is causing some issues. For example, it was
-observed that sometimes the memory monitor handler script can consume a lot of 
+observed that sometimes the memory monitor handler script can consume a lot of
 CPU and memory resources, which can lead to performance degradation of the other
 system components.
 

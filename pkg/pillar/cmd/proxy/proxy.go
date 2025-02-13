@@ -8,7 +8,7 @@ import (
 	"crypto/tls"
 	"fmt"
 	"github.com/lf-edge/eve/pkg/pillar/agentlog"
-	"github.com/lf-edge/eve/pkg/pillar/hardware"
+	"github.com/lf-edge/eve/pkg/pillar/cmd/zedagent"
 	"github.com/sirupsen/logrus"
 	"io"
 	"mime"
@@ -158,19 +158,11 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 
 	// Initialize a zedcloud context for multi‐interface sending
 	zctx := zedcloud.NewContext(log, zedcloud.ContextOptions{
-		DevNetworkStatus: &ctx.deviceNetworkStatus,
-		SendTimeout:      ctx.globalConfig.GlobalValueInt(types.NetworkSendTimeout),
-		DialTimeout:      ctx.globalConfig.GlobalValueInt(types.NetworkDialTimeout),
-		Serial:           hardware.GetProductSerial(log),
-		SoftSerial:       hardware.GetSoftSerial(log),
-		AgentName:        agentName,
+		SendTimeout: ctx.globalConfig.GlobalValueInt(types.NetworkSendTimeout),
+		DialTimeout: ctx.globalConfig.GlobalValueInt(types.NetworkDialTimeout),
+		AgentName:   agentName,
 	})
 	ctx.zedcloudCtx = zctx
-
-	err = zedcloud.UpdateTLSConfig(&zctx, nil)
-	if err != nil {
-		log.Fatal(err)
-	}
 
 	log.Noticef("#ohm: going to startLocalServer")
 
@@ -315,11 +307,12 @@ func handleGlobalConfigDelete(ctxArg interface{}, key string,
 	ctx.Logger.Infof("handleGlobalConfigDelete done for %s", key)
 }
 
-func securedPost(zedcloudCtx *zedcloud.ZedCloudContext, tlsConfig *tls.Config,
+func securedPost(_ *zedcloud.ZedCloudContext, tlsConfig *tls.Config,
 	requrl string, skipVerify bool, retryCount int,
 	reqlen int64, b *bytes.Buffer) (done bool, rv zedcloud.SendRetval) {
 
-	zedcloudCtx.TlsConfig = tlsConfig
+	zedcloudCtx := zedagent.GetZedcloudContext()
+
 	ctxWork, cancel := zedcloud.GetContextForAllIntfFunctions(zedcloudCtx)
 	defer cancel()
 
@@ -330,9 +323,19 @@ func securedPost(zedcloudCtx *zedcloud.ZedCloudContext, tlsConfig *tls.Config,
 		return false, rv
 	}
 
-	if rv.HTTPResp.StatusCode != http.StatusOK {
+	log.Noticef("#ohm: Received status %s", rv.HTTPResp.Status)
+	log.Noticef("#ohm: Received reply %s", string(rv.RespContents))
+
+	if rv.HTTPResp.StatusCode != http.StatusOK && rv.HTTPResp.StatusCode != http.StatusNoContent {
 		log.Errorf("%s failed: %s", requrl, rv.HTTPResp.Status)
 		return false, rv
+	}
+
+	// Print the body if it is not empty
+	log.Noticef("#ohm: Received reply %s", string(rv.RespContents))
+	// Print headers
+	for k, v := range rv.HTTPResp.Header {
+		log.Noticef("#ohm: Header %s: %s", k, v)
 	}
 
 	contentType := rv.HTTPResp.Header.Get("Content-Type")
@@ -356,10 +359,12 @@ func securedPost(zedcloudCtx *zedcloud.ZedCloudContext, tlsConfig *tls.Config,
 		return true, rv
 	}
 
+	log.Noticef("#ohm: Went to removeAndVerifyAuthContainer!")
 	err = zedcloud.RemoveAndVerifyAuthContainer(zedcloudCtx, &rv, skipVerify)
 	if err != nil {
 		log.Errorf("RemoveAndVerifyAuthContainer failed: %s", err)
 		return false, rv
 	}
+	log.Noticef("#ohm: Done with removeAndVerifyAuthContainer!")
 	return true, rv
 }

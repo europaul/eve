@@ -189,6 +189,41 @@ show_pid_mem_usage() {
   echo "Finished at $(date +%T)" >> "$output_file"
 }
 
+show_new_pid_mem_usage() {
+  cgroup_name="$1"
+  processes_file="$2"
+  output_file="$3"
+  detailed="${4:-0}"
+
+  echo "Memory usage for the cgroup $cgroup_name" > "$output_file"
+  echo "Started at: $(date +%T)" >> "$output_file"
+
+  usage_in_bytes=$(cat /sys/fs/cgroup/memory/"$cgroup_name"/memory.usage_in_bytes)
+  usage_in_KB=$((usage_in_bytes / 1024))
+  echo "Total usage according to cgroup: $usage_in_KB KB" >> "$output_file"
+  echo "" >> "$output_file"
+
+  while read -r pid; do
+    [ ! -d /proc/"$pid" ] && continue
+
+    if ! name=$(ps -p "$pid" -o cmd=); then
+      continue
+    fi
+
+    if [ "$detailed" -eq 1 ]; then
+      echo "Process $name (PID: $pid):" >> "$output_file"
+    fi
+
+    rss=$(grep -i VmRSS /proc/"$pid"/status | awk '{print $2}')
+    echo "VmRSS: ${rss} KB" >> "$output_file"
+
+    [ "$detailed" -eq 1 ] && echo "" >> "$output_file"
+  done < "$processes_file"
+
+  echo "Finished at $(date +%T)" >> "$output_file"
+}
+
+
 # Start from the root of your target memory cgroup
 cgroup_eve="/sys/fs/cgroup/memory/eve"
 cgroup_pillar="/sys/fs/cgroup/memory/eve/services/pillar"
@@ -241,7 +276,7 @@ show_pid_mem_usage "eve/services/pillar" "$sorted_pillar_processes" "$current_ou
 
 # ==== Handle the EVE memory usage ====
 
-show_pid_mem_usage "eve" "$sorted_eve_processes" "$current_output_dir/memstat_eve.out" 1
+show_pid_mem_usage "eve" "$sorted_eve_processes" "$current_output_dir/memstat_eve.out"
 
 eve http-debug stop
 

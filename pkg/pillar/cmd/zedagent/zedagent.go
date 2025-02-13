@@ -252,6 +252,10 @@ var logger *logrus.Logger
 var log *base.LogObject
 var zedcloudCtx *zedcloud.ZedCloudContext
 
+func GetZedcloudContext() *zedcloud.ZedCloudContext {
+	return zedcloudCtx
+}
+
 // Destination bitset as unsigned integer
 type destinationBitset uint
 

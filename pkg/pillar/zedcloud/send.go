@@ -849,6 +849,7 @@ func SendOnIntf(workContext context.Context, ctx *ZedCloudContext, destURL strin
 		}
 
 		if b2 != nil {
+			log.Noticef("Adding content-type %s\n", ContentTypeProto)
 			req.Header.Add("Content-Type", ContentTypeProto)
 		}
 		// Add a per-request UUID to the HTTP Header
