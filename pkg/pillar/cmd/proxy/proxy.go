@@ -11,7 +11,6 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/cmd/zedagent"
 	"github.com/sirupsen/logrus"
 	"io"
-	"mime"
 	"net/http"
 	"os"
 	"strings"
@@ -231,7 +230,11 @@ func (ctx *proxyContext) handleProxyRequest(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "No HTTP response from controller", http.StatusBadGateway)
 		return
 	}
-	defer respInfo.HTTPResp.Body.Close()
+	defer func() {
+		if respInfo.HTTPResp.Body != nil {
+			respInfo.HTTPResp.Body.Close()
+		}
+	}()
 
 	// 4. Forward status code and response headers
 	for k, vv := range respInfo.HTTPResp.Header {
@@ -242,8 +245,10 @@ func (ctx *proxyContext) handleProxyRequest(w http.ResponseWriter, r *http.Reque
 	w.WriteHeader(respInfo.HTTPResp.StatusCode)
 
 	// 5. Copy response body
-	respBody, _ := io.ReadAll(respInfo.HTTPResp.Body)
-	w.Write(respBody)
+	if respInfo.HTTPResp.Body != nil {
+		respBody, _ := io.ReadAll(respInfo.HTTPResp.Body)
+		w.Write(respBody)
+	}
 }
 
 func handleDeviceNetworkStatusCreate(contextArg interface{}, _ string, statusArg interface{}) {
@@ -338,33 +343,33 @@ func securedPost(_ *zedcloud.ZedCloudContext, tlsConfig *tls.Config,
 		log.Noticef("#ohm: Header %s: %s", k, v)
 	}
 
-	contentType := rv.HTTPResp.Header.Get("Content-Type")
-	if contentType == "" {
-		log.Errorf("%s no content-type", requrl)
-		return false, rv
-	}
-	mimeType, _, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		log.Errorf("%s ParseMediaType failed %v", requrl, err)
-		return false, rv
-	}
-	switch mimeType {
-	case "application/x-proto-binary", "application/json", "text/plain":
-		log.Tracef("Received reply %s", string(rv.RespContents))
-	default:
-		log.Errorln("Incorrect Content-Type " + mimeType)
-		return false, rv
-	}
-	if len(rv.RespContents) == 0 {
-		return true, rv
-	}
-
-	log.Noticef("#ohm: Went to removeAndVerifyAuthContainer!")
-	err = zedcloud.RemoveAndVerifyAuthContainer(zedcloudCtx, &rv, skipVerify)
-	if err != nil {
-		log.Errorf("RemoveAndVerifyAuthContainer failed: %s", err)
-		return false, rv
-	}
-	log.Noticef("#ohm: Done with removeAndVerifyAuthContainer!")
+	//contentType := rv.HTTPResp.Header.Get("Content-Type")
+	//if contentType == "" {
+	//	log.Errorf("%s no content-type", requrl)
+	//	return false, rv
+	//}
+	//mimeType, _, err := mime.ParseMediaType(contentType)
+	//if err != nil {
+	//	log.Errorf("%s ParseMediaType failed %v", requrl, err)
+	//	return false, rv
+	//}
+	//switch mimeType {
+	//case "application/x-proto-binary", "application/json", "text/plain":
+	//	log.Tracef("Received reply %s", string(rv.RespContents))
+	//default:
+	//	log.Errorln("Incorrect Content-Type " + mimeType)
+	//	return false, rv
+	//}
+	//if len(rv.RespContents) == 0 {
+	//	return true, rv
+	//}
+	//
+	//log.Noticef("#ohm: Went to removeAndVerifyAuthContainer!")
+	//err = zedcloud.RemoveAndVerifyAuthContainer(zedcloudCtx, &rv, skipVerify)
+	//if err != nil {
+	//	log.Errorf("RemoveAndVerifyAuthContainer failed: %s", err)
+	//	return false, rv
+	//}
+	//log.Noticef("#ohm: Done with removeAndVerifyAuthContainer!")
 	return true, rv
 }
