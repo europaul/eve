@@ -4,13 +4,16 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/tls"
 	"fmt"
 	"github.com/lf-edge/eve/pkg/pillar/agentlog"
 	"github.com/lf-edge/eve/pkg/pillar/cmd/zedagent"
 	"github.com/sirupsen/logrus"
+	"golang.org/x/sys/unix"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"strings"
@@ -19,6 +22,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	"github.com/lf-edge/eve/pkg/pillar/agentbase"
 	"github.com/lf-edge/eve/pkg/pillar/base"
+	"github.com/lf-edge/eve/pkg/pillar/cmd/vcomlink"
 	"github.com/lf-edge/eve/pkg/pillar/pubsub"
 	"github.com/lf-edge/eve/pkg/pillar/types"
 	"github.com/lf-edge/eve/pkg/pillar/utils/wait"
@@ -186,7 +190,8 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 func startLocalServer(ctx *proxyContext) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		ctx.handleProxyRequest(w, r)
+		//ctx.handleProxyRequest(w, r)
+		ctx.handleProxyVsockRequest(w, r)
 	})
 
 	srv := &http.Server{
@@ -197,6 +202,95 @@ func startLocalServer(ctx *proxyContext) {
 	if err := srv.ListenAndServe(); err != nil {
 		ctx.Logger.Fatalf("#ohm: ListenAndServe: %v", err)
 	}
+}
+
+func (ctx *proxyContext) handleProxyVsockRequest(w http.ResponseWriter, r *http.Request) {
+	log.Noticef("#ohm: Received request %s %s", r.Method, r.URL.Path)
+
+	// Prepare the request to be sent to the controller: headers, body, etc.
+	reqBody, err := io.ReadAll(r.Body)
+	if err != nil {
+		log.Errorf("#ohm: Failed to read body: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to read body: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	var vmCID uint32
+	var vmPort uint32 = 2412
+	var reqBytes []byte
+
+	// Form the request bytes, starting with the path and method
+	firstLine := fmt.Sprintf("%s %s HTTP/1.1\r\n", r.Method, r.URL.Path)
+	reqBytes = append(reqBytes, []byte(firstLine)...)
+
+	mandatoryHeaders := []string{"Content-Encoding", "Content-Type", "User-Agent", "X-Prometheus-Remote-Write-Version", "Host"}
+	defaultHeaders := map[string]string{
+		"Content-Encoding":                  "snappy",
+		"Content-Type":                      "application/x-protobuf",
+		"User-Agent":                        "pillar",
+		"X-Prometheus-Remote-Write-Version": "0.1.0",
+		"Host":                              "localhost:9009",
+	}
+
+	for key, values := range r.Header {
+		for _, value := range values {
+			log.Noticef("#ohm: Header %s: %s", key, value)
+		}
+		// Form a string and append to reqBytes
+		reqBytes = append(reqBytes, []byte(fmt.Sprintf("%s: %s\r\n", key, values[0]))...)
+	}
+
+	for _, header := range mandatoryHeaders {
+		if _, ok := r.Header[header]; !ok {
+			log.Errorf("#ohm: Missing header %s", header)
+			// Add the header with a default value, form a string and append to reqBytes
+			reqBytes = append(reqBytes, []byte(fmt.Sprintf("%s: %s\n", header, defaultHeaders[header]))...)
+		}
+	}
+
+	// Append the last CRLF
+	reqBytes = append(reqBytes, []byte("\r\n")...)
+
+	// Print current request bytes
+	log.Noticef("#ohm: Request bytes:\n%s", string(reqBytes))
+
+	// Append the request body to reqBytes
+	reqBytes = append(reqBytes, reqBody...)
+	var resp *http.Response
+
+	// Try sending to a range of vmCIDs until one succeeds.
+	for i := 3; i < 10; i++ {
+		vmCID = uint32(i)
+		resp, err = vsockSend(vmCID, vmPort, reqBytes)
+		if err != nil {
+			log.Warnf("#ohm: Failed to send via vsock to vmCID %d: %v", vmCID, err)
+			continue
+		}
+		log.Noticef("#ohm: Received response from vsock %d", vmCID)
+		break
+	}
+	if err != nil {
+		log.Errorf("#ohm: Failed to send request via vsock: %v", err)
+		http.Error(w, fmt.Sprintf("Failed to send request via vsock: %v", err), http.StatusBadGateway)
+		return
+	}
+
+	// Write the response back to the client
+	for k, vv := range resp.Header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.WriteHeader(resp.StatusCode)
+	defer resp.Body.Close()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	w.Write(respBody)
+
+	log.Noticef("#ohm: Response from vsock %d: %v", vmCID, resp.Status)
+
+	return
+
 }
 
 // handleProxyRequest receives an incoming local HTTP request
@@ -310,6 +404,83 @@ func handleGlobalConfigDelete(ctxArg interface{}, key string,
 		ctx.CLIParams().DebugOverride, ctx.Logger)
 	*ctx.globalConfig = *types.DefaultConfigItemValueMap()
 	ctx.Logger.Infof("handleGlobalConfigDelete done for %s", key)
+}
+
+func dialVsock(cid uint32, port uint32) (net.Conn, error) {
+	// Create a vsock socket.
+	fd, err := unix.Socket(unix.AF_VSOCK, unix.SOCK_STREAM, 0)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create vsock socket: %w", err)
+	}
+
+	// Build the vsock address.
+	addr := &unix.SockaddrVM{
+		CID:  cid,
+		Port: port, // ensure proper type conversion if needed
+	}
+	// Connect to the VM's vsock listener.
+	if err := unix.Connect(fd, addr); err != nil {
+		unix.Close(fd)
+		return nil, fmt.Errorf("failed to connect vsock socket: %w", err)
+	}
+
+	// Instead of wrapping with net.FileConn (which doesn't support vsock),
+	// use your custom VSOCKConn that implements net.Conn.
+	conn := &vcomlink.VSOCKConn{
+		Fd:   fd,
+		Addr: addr,
+	}
+	return conn, nil
+}
+
+func vsockSend(vmCID uint32, vmPort uint32, data []byte) (*http.Response, error) {
+	// Dial the vsock connection.
+	conn, err := dialVsock(vmCID, vmPort)
+	if err != nil {
+		return nil, fmt.Errorf("failed to dial vsock: %w", err)
+	}
+	// Do not defer conn.Close() here since the response's Body will wrap this connection.
+	conn.SetDeadline(time.Now().Add(30 * time.Second))
+
+	log.Noticef("#ohm: Sending request to vsock %d", vmCID)
+
+	// Write the entire request data to the vsock connection.
+	if _, err := conn.Write(data); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to write data to vsock: %w", err)
+	}
+
+	log.Noticef("#ohm: Now I will read the response from vsock %d", vmCID)
+
+	// Read in stream mode until a proper HTTP response is received.
+	reader := bufio.NewReader(conn)
+	log.Noticef("#ohm: Going to read response from vsock %d", vmCID)
+	// Create a dummy request to indicate that this is a response to a POST request.
+	req := http.Request{
+		Method: "POST",
+	}
+	resp, err := http.ReadResponse(reader, &req)
+	if err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("failed to read HTTP response: %w", err)
+	}
+	log.Noticef("#ohm: Received response from vsock %d, status %s", vmCID, resp.Status)
+
+	// Print the headers
+	for k, v := range resp.Header {
+		log.Noticef("#ohm: Header %s: %s", k, v)
+	}
+
+	// Check for acceptable status codes.
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		body, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		conn.Close()
+		return nil, fmt.Errorf("unexpected status code: %d, body: %s", resp.StatusCode, body)
+	}
+
+	// Return the response; the caller is responsible for closing resp.Body (which will also close the underlying connection).
+	return resp, nil
 }
 
 func securedPost(_ *zedcloud.ZedCloudContext, tlsConfig *tls.Config,

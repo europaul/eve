@@ -19,8 +19,8 @@ type VSOCKListener struct {
 
 // VSOCKConn represents a connection over a vsock.
 type VSOCKConn struct {
-	fd   int // File descriptor for the connection
-	addr *unix.SockaddrVM
+	Fd   int // File descriptor for the connection
+	Addr *unix.SockaddrVM
 }
 
 // VSOCKAddr represents a vsock address.
@@ -46,7 +46,7 @@ func (l *VSOCKListener) Accept() (net.Conn, error) {
 	}
 
 	// return the fd wrapped in net.Conn.
-	conn := &VSOCKConn{fd: connFd, addr: l.addr}
+	conn := &VSOCKConn{Fd: connFd, Addr: l.addr}
 	return conn, nil
 }
 
@@ -62,17 +62,17 @@ func (l *VSOCKListener) Addr() net.Addr {
 
 // Read reads data from the vsock connection.
 func (c *VSOCKConn) Read(b []byte) (n int, err error) {
-	return unix.Read(c.fd, b)
+	return unix.Read(c.Fd, b)
 }
 
 // Write writes data to the vsock connection.
 func (c *VSOCKConn) Write(b []byte) (n int, err error) {
-	return unix.Write(c.fd, b)
+	return unix.Write(c.Fd, b)
 }
 
 // Close closes the vsock connection.
 func (c *VSOCKConn) Close() error {
-	return unix.Close(c.fd)
+	return unix.Close(c.Fd)
 }
 
 // LocalAddr returns the local address of the vsock connection.
@@ -82,7 +82,7 @@ func (c *VSOCKConn) LocalAddr() net.Addr {
 
 // RemoteAddr returns the remote address of the vsock connection.
 func (c *VSOCKConn) RemoteAddr() net.Addr {
-	return &VSOCKAddr{addr: c.addr}
+	return &VSOCKAddr{addr: c.Addr}
 }
 
 // Network returns the network type (vsock).

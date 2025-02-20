@@ -133,7 +133,7 @@ func vsockDial(cid, port uint32) (net.Conn, error) {
 		return nil, fmt.Errorf("error connecting to VSOCK server: %v", err)
 	}
 
-	return &VSOCKConn{fd: sockfd}, nil
+	return &VSOCKConn{Fd: sockfd}, nil
 }
 
 func vsockClientTcpTransport() *http.Transport {
