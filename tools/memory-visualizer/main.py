@@ -10,8 +10,11 @@ from plotly.subplots import make_subplots
 # The red_dot column is used to mark the points in the graph: those with red_dot=true should have
 # red round markers, the others should have no markers
 
+has_red_dot = False
+
 # Get file from the argument
 def main():
+    global has_red_dot
     args = parse_args()
     if args.heap_file is None or args.rss_file is None:
         print("Please provide a heap file and a rss file")
@@ -27,6 +30,9 @@ def main():
     df_heap = pd.read_csv(args.heap_file)
     df_rss = pd.read_csv(args.rss_file)
 
+    if 'red' in df_heap.columns:
+        has_red_dot = True
+
     fig = make_subplots(rows=1, cols=1)
 
     # Add the main line with all the usage data
@@ -38,23 +44,25 @@ def main():
         line=dict(color='lightblue', width=2)
     ), row=1, col=1)
 
-    # Add the red circles around the points with red_dot=true
-    red_dot = df_heap[df_heap['red_dot'] == True]
-    fig.add_trace(go.Scatter(
-        x=red_dot['time'],
-        y=red_dot['memory_usage'],
-        mode='markers',
-        marker=dict(color='red', symbol='circle', size=2),
-        name='Detector Triggered'), row=1, col=1)
+    # If the data has a red_dot column, add the red circles around the points with red_dot=true
+    if has_red_dot:
+        # Add the red circles around the points with red_dot=true
+        red_dot = df_heap[df_heap['red'] == 1]
+        fig.add_trace(go.Scatter(
+            x=red_dot['time'],
+            y=red_dot['memory_usage'],
+            mode='markers',
+            marker=dict(color='red', symbol='circle', size=2),
+            name='Detector Triggered'), row=1, col=1)
 
-    # Add the main line with RSS data from the RSS file
-    fig.add_trace(go.Scatter(
+        # Add the main line with RSS data from the RSS file
+        fig.add_trace(go.Scatter(
         x=df_rss['time'],
         y=df_rss['memory_usage'],
         mode='lines',
         name='RSS',
         line=dict(color='lightgreen', width=2)
-    ), row=1, col=1)
+        ), row=1, col=1)
 
     def update_smoothed_data(window_size):
         df_heap['smoothed'] = df_heap['memory_usage'].rolling(window=window_size,
@@ -87,13 +95,15 @@ def main():
             dict(
                 buttons=list([
                     dict(
-                        args=[{'y': [df_heap['memory_usage'], red_dot['memory_usage'], df_rss['memory_usage']]}],
+                        args=[{'y': [df_heap['memory_usage'],
+                                     red_dot['memory_usage'] if has_red_dot else None,
+                                     df_rss['memory_usage']]}],
                         label='Bytes',
                         method='restyle'
                     ),
                     dict(
                         args=[{'y': [df_heap['memory_usage'] / 1024 / 1024,
-                                     red_dot['memory_usage'] / 1024 / 1024,
+                                     red_dot['memory_usage'] / 1024 / 1024 if has_red_dot else None,
                                      df_rss['memory_usage'] / 1024 / 1024],
                                }],
                         label='Megabytes',

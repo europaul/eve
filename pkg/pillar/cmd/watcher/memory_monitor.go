@@ -1,4 +1,4 @@
-// Copyright (c) 2024 Zededa, Inc.
+// Copyright (c) 2025 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 package watcher
@@ -236,7 +236,7 @@ func writeMemoryUsage(timeNow time.Time, memUsage uint64, outPath string) {
 	}
 
 	if fileInfo.Size() == 0 {
-		header := []string{"time", "memory_usage"}
+		header := []string{"time", "memory_usage", "red"}
 		if err := w.Write(header); err != nil {
 			fmt.Printf("Error writing header: %v\n", err)
 			return
@@ -244,7 +244,7 @@ func writeMemoryUsage(timeNow time.Time, memUsage uint64, outPath string) {
 	}
 
 	// Write the data
-	record := []string{timeNow.Format(time.RFC3339), fmt.Sprintf("%d", memUsage)}
+	record := []string{timeNow.Format(time.RFC3339), fmt.Sprintf("%d", memUsage), "0"}
 	if err := w.Write(record); err != nil {
 		fmt.Printf("Error writing record: %v\n", err)
 		return
@@ -258,6 +258,63 @@ func writeMemoryUsage(timeNow time.Time, memUsage uint64, outPath string) {
 	}
 
 	fmt.Printf("Data exported to %s\n", outPath)
+}
+
+// markLastUsageRed marks the last usage in the file as red.
+func markLastUsageRed(filename string) {
+	// Open the file
+	file, err := os.OpenFile(filename, os.O_RDWR, 0644)
+	if err != nil {
+		log.Warnf("failed to open file: %v", err)
+		return
+	}
+	defer file.Close()
+
+	// Seek to the end of the file
+	offset, err := file.Seek(0, io.SeekEnd)
+	if err != nil {
+		fmt.Println("Error seeking file:", err)
+		return
+	}
+
+	// Read the file backwards until we find the last "0"
+	// and replace it with "1"
+	for {
+		offset--
+		if offset < 0 {
+			fmt.Println("Reached beginning of file without finding 0")
+			return
+		}
+		_, err = file.Seek(offset, io.SeekStart)
+		if err != nil {
+			fmt.Println("Error seeking file:", err)
+			return
+		}
+		b := make([]byte, 1)
+		_, err = file.Read(b)
+		if err != nil {
+			fmt.Println("Error reading file:", err)
+			return
+		}
+		if b[0] == '0' {
+			break
+		}
+	}
+
+	_, err = file.WriteAt([]byte("1"), offset)
+	if err != nil {
+		fmt.Println("Error writing file:", err)
+		return
+	}
+
+	fmt.Println("Last usage marked as red")
+
+	// Flush any buffered data to disk
+	if err := file.Sync(); err != nil {
+		fmt.Printf("Error flushing file: %v\n", err)
+		return
+	}
+	return
 }
 
 func readFirstStatAvailable(filename string) *time.Time {
@@ -292,7 +349,7 @@ func readFirstStatAvailable(filename string) *time.Time {
 	return &timeRead
 }
 
-func readSamplesOlderThan(filename string, timeCutoff time.Time) []uint64 {
+func readSamplesNewerThan(filename string, timeCutoff time.Time) []uint64 {
 	path := filepath.Join(types.MemoryMonitorOutputDir, filename)
 	file, err := os.Open(path)
 	if err != nil {
@@ -314,18 +371,15 @@ func readSamplesOlderThan(filename string, timeCutoff time.Time) []uint64 {
 	}
 
 	var values []uint64
-	var firstFound bool
 	for _, record := range records[1:] {
 		timeStr := record[0]
-		if !firstFound {
-			timeRead, err := time.Parse(time.RFC3339, timeStr)
-			if err != nil {
-				log.Warnf("failed to parse time: %v", err)
-				continue
-			}
-			if timeRead.Before(timeCutoff) {
-				firstFound = true
-			}
+		timeRead, err := time.Parse(time.RFC3339, timeStr)
+		if err != nil {
+			log.Warnf("failed to parse time: %v", err)
+			continue
+		}
+		if timeRead.Before(timeCutoff) {
+			continue
 		}
 		valueStr := record[1]
 		value, err := strconv.ParseUint(valueStr, 10, 64)
@@ -356,10 +410,13 @@ func MemoryMonitor(interval time.Duration, sampleSize int, threshold float64) ch
 	go func() {
 		statsPointsNum := 0
 
-		//smoothWindowSize := int(SmoothInterval / interval)
+		smoothWindowSize := int(SmoothInterval / interval)
 
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+
+		heapReachedThreshold := 0
+		rssReachedThreshold := 0
 
 		for {
 			select {
@@ -395,30 +452,49 @@ func MemoryMonitor(interval time.Duration, sampleSize int, threshold float64) ch
 				}
 
 				// If we have enough samples, perform regression
-				if timeNow.Sub(*firstStatAvailable) < MemLeakMinimumInterval {
+				if timeNow.Sub(*firstStatAvailable) >= MemLeakMinimumInterval {
 
 					// Calculate the time of the first sample to be used in the regression
-					//firstSampleTime := timeNow.Add(-MemLeakMinimumInterval)
+					firstSampleTime := timeNow.Add(-MemLeakMinimumInterval)
 
-					// Read all samples older than the first sample time
-					//heapValues := readSamplesOlderThan("heap_usage.csv", firstSampleTime)
-					//rssValues := readSamplesOlderThan("rss_usage.csv", firstSampleTime)
+					// Read all samples newer than the first sample time
+					heapValues := readSamplesNewerThan("heap_usage.csv", firstSampleTime)
+					rssValues := readSamplesNewerThan("rss_usage.csv", firstSampleTime)
 
 					// Get a timestamp for the filename
 					// Smooth the values via a median filter to reduce spikes
-					// smoothedHeapValues := medianFilter(heapValues, smoothWindowSize)
-					// smoothedRSSValues := medianFilter(rssValues, smoothWindowSize)
-					// heapSlope := linearRegressionSlope(times, smoothedHeapValues)
-					// RSSSlope := linearRegressionSlope(times, smoothedRSSValues)
-					// If slope is positive and above a certain threshold, print a warning
-					//if heapSlope > threshold {
-					//	log.Tracef("Potential heap memory leak detected: slope %.2f > %.2f\n", heapSlope, threshold)
-					//	log.Warnf("Potential heap memory leak detected: slope %.2f > %.2f\n", heapSlope, threshold)
-					//}
-					//if RSSSlope > threshold {
-					//	log.Tracef("Potential RSS memory leak detected: slope %.2f > %.2f\n", RSSSlope, threshold)
-					//	log.Warnf("Potential RSS memory leak detected: slope %.2f > %.2f\n", RSSSlope, threshold)
-					//}
+					smoothedHeapValues := medianFilter(heapValues, smoothWindowSize)
+					smoothedRSSValues := medianFilter(rssValues, smoothWindowSize)
+					times := make([]float64, len(smoothedHeapValues))
+					for i := range smoothedHeapValues {
+						times[i] = float64(i) * interval.Seconds()
+					}
+
+					heapSlope := linearRegressionSlope(times, smoothedHeapValues)
+					RSSSlope := linearRegressionSlope(times, smoothedRSSValues)
+					//If slope is positive and above a certain threshold, print a warning
+					if heapSlope > threshold {
+						heapReachedThreshold++
+						if heapReachedThreshold > 10 {
+							log.Tracef("Potential heap memory leak detected: slope %.2f > %.2f\n", heapSlope, threshold)
+							log.Warnf("#ohm: Potential heap memory leak detected: slope %.2f > %.2f\n", heapSlope, threshold)
+							fileName = path.Join(types.MemoryMonitorOutputDir, "heap_usage.csv")
+							markLastUsageRed(fileName)
+						}
+					} else {
+						heapReachedThreshold = 0
+					}
+					if RSSSlope > threshold {
+						rssReachedThreshold++
+						if rssReachedThreshold > 10 {
+							log.Tracef("Potential RSS memory leak detected: slope %.2f > %.2f\n", RSSSlope, threshold)
+							log.Warnf("#ohm: Potential RSS memory leak detected: slope %.2f > %.2f\n", RSSSlope, threshold)
+							fileName = path.Join(types.MemoryMonitorOutputDir, "rss_usage.csv")
+							markLastUsageRed(fileName)
+						}
+					} else {
+						rssReachedThreshold = 0
+					}
 				}
 			}
 		}
@@ -427,13 +503,19 @@ func MemoryMonitor(interval time.Duration, sampleSize int, threshold float64) ch
 }
 
 // linearRegressionSlope calculates the slope (beta) via Gonum's LinearRegression.
-func linearRegressionSlope(xs, ys []float64) float64 {
+func linearRegressionSlope(xs []float64, ys []uint64) float64 {
 	// Basic sanity check
 	if len(xs) != len(ys) || len(xs) < 2 {
+		log.Warnf("#ohm: Insufficient data for regression\n")
 		return 0
 	}
+	// Convert uint64 to float64
+	ysFloat := make([]float64, len(ys))
+	for i, y := range ys {
+		ysFloat[i] = float64(y)
+	}
 	// LinearRegression returns (alpha, beta)
-	alpha, beta := stat.LinearRegression(xs, ys, nil, false)
-	_ = alpha // We only need slope in this case
+	alpha, beta := stat.LinearRegression(xs, ysFloat, nil, false)
+	log.Noticef("#ohm: Linear regression: alpha %.2f, beta %.2f\n", alpha, beta)
 	return beta
 }

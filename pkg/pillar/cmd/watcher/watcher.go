@@ -622,7 +622,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	var (
 		memLeakDetectorInterval  = 5 * time.Second
 		memLeakDetectorSamples   = int(4 * 24 * time.Hour / memLeakDetectorInterval)
-		memLeakDetectorThreshold = 1000.0
+		memLeakDetectorThreshold = float64(4096 * 10) // bytes per second (10 pages per second)
 	)
 
 	_ = MemoryMonitor(memLeakDetectorInterval, memLeakDetectorSamples, memLeakDetectorThreshold)
