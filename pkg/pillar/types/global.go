@@ -277,6 +277,18 @@ const (
 	// this period no stack traces are collected, only warning messages are logged.
 	GoroutineLeakDetectionCooldownMinutes GlobalSettingKey = "goroutine.leak.detection.cooldown.minutes"
 
+	// Internal Memory Monitor settings
+	// InternalMemoryMonitorAnalysisPeriodMinutes - how often to analyze memory usage
+	InternalMemoryMonitorAnalysisPeriodMinutes GlobalSettingKey = "internal-memory-monitor.analysis.period.minutes"
+	// InternalMemoryMonitorSmoothingPeriodSeconds - on which period to smooth the memory usage
+	InternalMemoryMonitorSmoothingPeriodSeconds GlobalSettingKey = "internal-memory-monitor.smoothing.period.seconds"
+	// InternalMemoryMonitorProbingIntervalSeconds - how often to probe memory usage
+	InternalMemoryMonitorProbingIntervalSeconds GlobalSettingKey = "internal-memory-monitor.probing.interval.seconds"
+	// InternalMemoryMonitorSlopeThreshold - threshold for the slope of memory usage growth (bytes/sec)
+	InternalMemoryMonitorSlopeThreshold GlobalSettingKey = "internal-memory-monitor.slope.threshold"
+	// InternalMemoryMonitorEnabled - enable/disable internal memory monitor
+	InternalMemoryMonitorEnabled GlobalSettingKey = "internal-memory-monitor.active"
+
 	// TriState Items
 	// NetworkFallbackAnyEth global setting key
 	NetworkFallbackAnyEth GlobalSettingKey = "network.fallback.any.eth"
@@ -974,6 +986,13 @@ func NewConfigItemSpecMap() ConfigItemSpecMap {
 	configItemSpecMap.AddIntItem(GoroutineLeakDetectionCheckWindowMinutes, 10, 10, 0xFFFFFFFF)
 	configItemSpecMap.AddIntItem(GoroutineLeakDetectionKeepStatsHours, 24, 1, 0xFFFFFFFF)
 	configItemSpecMap.AddIntItem(GoroutineLeakDetectionCooldownMinutes, 5, 1, 0xFFFFFFFF)
+
+	// Internal Memory Monitoring section
+	configItemSpecMap.AddIntItem(InternalMemoryMonitorAnalysisPeriodMinutes, 10, 1, 0xFFFFFFFF)
+	configItemSpecMap.AddIntItem(InternalMemoryMonitorSmoothingPeriodSeconds, 10, 5, 0xFFFFFFFF)
+	configItemSpecMap.AddIntItem(InternalMemoryMonitorProbingIntervalSeconds, 5, 1, 0xFFFFFFFF)
+	configItemSpecMap.AddIntItem(InternalMemoryMonitorSlopeThreshold, 4096*10, 4096, 0xFFFFFFFF)
+	configItemSpecMap.AddBoolItem(InternalMemoryMonitorEnabled, true)
 
 	// Add Bool Items
 	configItemSpecMap.AddBoolItem(UsbAccess, true) // Controller likely default to false

@@ -272,7 +272,7 @@ func TestGoroutinesMonitorNoLeak(t *testing.T) {
 	ctx.GRLDParams.Set(goroutinesThreshold, checkInterval, checkStatsFor, keepStatsFor, cooldownPeriod)
 	ctx.GRLDParams.MakeStoppable()
 
-	go goroutinesMonitor(ctx)
+	go GoroutinesMonitor(ctx)
 	defer ctx.GRLDParams.Stop()
 
 	timeStart := time.Now()
@@ -319,7 +319,7 @@ func TestGoroutinesMonitorLeak(t *testing.T) {
 	ctx.GRLDParams.Set(goroutinesThreshold, checkInterval, checkStatsFor, keepStatsFor, cooldownPeriod)
 	ctx.GRLDParams.MakeStoppable()
 
-	go goroutinesMonitor(ctx)
+	go GoroutinesMonitor(ctx)
 	defer ctx.GRLDParams.Stop()
 
 	timeStart := time.Now()
@@ -373,7 +373,7 @@ func TestGoroutinesMonitorUpdateParamsKeepStatsDecrease(t *testing.T) {
 	ctx.GRLDParams.Set(goroutinesThreshold, checkInterval, checkStatsFor, keepStatsFor, cooldownPeriod)
 	ctx.GRLDParams.MakeStoppable()
 
-	go goroutinesMonitor(ctx)
+	go GoroutinesMonitor(ctx)
 	defer ctx.GRLDParams.Stop()
 
 	// Wait until we fill the stats slice
@@ -438,7 +438,7 @@ func TestGoroutinesMonitorUpdateParamsKeepStatsIncrease(t *testing.T) {
 	ctx.GRLDParams.Set(goroutinesThreshold, checkInterval, checkStatsFor, keepStatsFor, cooldownPeriod)
 	ctx.GRLDParams.MakeStoppable()
 
-	go goroutinesMonitor(ctx)
+	go GoroutinesMonitor(ctx)
 	defer ctx.GRLDParams.Stop()
 
 	// Wait until we fill the stats slice
@@ -494,7 +494,7 @@ func TestGoroutineMonitorStops(t *testing.T) {
 	ctx.GRLDParams.Set(goroutinesThreshold, checkInterval, checkStatsFor, keepStatsFor, cooldownPeriod)
 	ctx.GRLDParams.MakeStoppable()
 
-	go goroutinesMonitor(ctx)
+	go GoroutinesMonitor(ctx)
 
 	// Let the monitor run for a while
 	time.Sleep(keepStatsFor * 2)
@@ -542,7 +542,7 @@ func TestGoroutineMonitorRunsFineUnstoppable(t *testing.T) {
 	ctx := &watcherContext{}
 	ctx.GRLDParams.Set(goroutinesThreshold, checkInterval, checkStatsFor, keepStatsFor, cooldownPeriod)
 
-	go goroutinesMonitor(ctx)
+	go GoroutinesMonitor(ctx)
 
 	time.Sleep(keepStatsFor * 2)
 
@@ -588,15 +588,26 @@ func TestMemoryLeakDetectorStarts(t *testing.T) {
 		logger.SetLevel(backupLevel)
 	}()
 
-	interval := 100 * time.Millisecond
-	sampleSize := 5
-	threshold := 1000.0
+	analysisInterval := 100 * time.Millisecond
+	processInterval := 5 * time.Millisecond
+	smoothingProbeCount := 5
+	slopeThreshold := 1000.0
 
-	stopCh := MemoryMonitor(interval, sampleSize, threshold)
-	defer close(stopCh)
+	// Create context with default parameters
+	ctx := &watcherContext{}
+	ctx.IMMParams.Set(analysisInterval, processInterval, slopeThreshold, smoothingProbeCount, true)
+	ctx.IMMParams.MakeStoppable()
+
+	go InternalMemoryMonitor(ctx)
 
 	// Let it collect some samples
-	time.Sleep(interval * 3)
+	time.Sleep(analysisInterval * 3)
+
+	// Stop the monitor
+	ctx.IMMParams.Stop()
+
+	// Wait for several check intervals to allow the monitor to stop
+	time.Sleep(processInterval * 100)
 
 	// Close the pipe
 	_ = w.Close()
@@ -623,11 +634,16 @@ func TestMemoryLeakDetectorDetects(t *testing.T) {
 	}()
 
 	interval := 100 * time.Millisecond
+	processInterval := 5 * time.Millisecond
 	sampleSize := 5
 	threshold := 1000.0
 
-	stopCh := MemoryMonitor(interval, sampleSize, threshold)
-	defer close(stopCh)
+	// Create context with default parameters
+	ctx := &watcherContext{}
+	ctx.IMMParams.Set(interval, processInterval, threshold, sampleSize, true)
+	ctx.IMMParams.MakeStoppable()
+
+	go InternalMemoryMonitor(ctx)
 
 	memLeakCh := make(chan struct{})
 	go eatMemory(memLeakCh)
@@ -635,7 +651,12 @@ func TestMemoryLeakDetectorDetects(t *testing.T) {
 	// Let it collect some samples
 	time.Sleep(interval * 100)
 
+	// Stop the monitor
+	ctx.IMMParams.Stop()
 	memLeakCh <- struct{}{}
+
+	// Wait for several check intervals to allow the monitor to stop
+	time.Sleep(processInterval * 100)
 
 	// Close the pipe
 	_ = w.Close()
