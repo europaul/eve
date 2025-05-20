@@ -1,0 +1,12 @@
+image: eve-vector
+org: lfedge
+config:
+  binds:
+    - /dev:/dev
+    - /run:/run
+    - /persist:/persist
+    - /config:/config
+  capabilities:
+    - all
+  net: host
+  pid: host
