@@ -1014,12 +1014,14 @@ func writelogFile(logChan <-chan inputEntry, moveChan chan fileChanInfo) {
 
 			} else {
 				if entry.sendToRemote {
+					sendLogEntryToSocket(&devStatsUpload, logline)
 					writelogEntry(&devStatsUpload, logline)
 
 					trigMoveToGzip(&devStatsUpload, "", moveChan, false)
 				}
 
 				// write all log entries to the log file to keep
+				sendLogEntryToSocket(&devStatsKeep, logline)
 				n := writelogEntry(&devStatsKeep, logline)
 				updateDevInputlogStats(entry.source, uint64(n))
 
@@ -1162,6 +1164,45 @@ func updateDevInputlogStats(source string, size uint64) {
 	devSourceBytes.Store(source, b)
 
 	logmetrics.DevMetrics.NumBytesWrite += size
+}
+
+func sendLogEntryToSocket(stats *statsLogFile, logline string) int {
+	if strings.Contains(stats.file.Name(), devPrefixKeep) {
+		// open the socket /run/devKeep.sock and send the logline there
+		sockName := fmt.Sprintf("/run/%s.sock", "devKeep")
+		s, err := net.Dial("unix", sockName)
+		if err != nil {
+			log.Errorf("sendLogEntryToSocket: Dial: %v", err)
+			return -1
+		}
+		defer s.Close()
+		n, err := s.Write([]byte(logline))
+		if err != nil {
+			log.Errorf("sendLogEntryToSocket: write to devKeep failed: %v", err)
+			return -1
+		}
+		log.Tracef("sendLogEntryToSocket: wrote %d bytes to devKeep", n)
+
+		return n
+	} else if strings.Contains(stats.file.Name(), devPrefixUpload) {
+		// open the socket /run/devUpload.sock and send the logline there
+		sockName := fmt.Sprintf("/run/%s.sock", "devUpload")
+		s, err := net.Dial("unix", sockName)
+		if err != nil {
+			log.Errorf("sendLogEntryToSocket: Dial: %v", err)
+			return -1
+		}
+		defer s.Close()
+		n, err := s.Write([]byte(logline))
+		if err != nil {
+			log.Errorf("sendLogEntryToSocket: write to devUpload failed: %v", err)
+			return -1
+		}
+		log.Tracef("sendLogEntryToSocket: wrote %d bytes to devUpload", n)
+		return n
+	}
+
+	return 0
 }
 
 // write log entry, update size and index, sync file if needed
