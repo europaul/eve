@@ -46,6 +46,10 @@ services:
     image: MONITOR_TAG
     cgroupsPath: /eve/services/monitor
     oomScoreAdj: -999
+  - name: vector
+    image: VECTOR_TAG
+    cgroupsPath: /eve/services/vector
+    oomScoreAdj: -999
   - name: newlogd
     image: NEWLOGD_TAG
     cgroupsPath: /eve/services/newlogd
@@ -94,9 +98,9 @@ services:
     image: VMAGENT_TAG
     cgroupsPath: /eve/services/vmagent
     oomScoreAdj: -999
-  - name: node_exporter
+  - name: node-exporter
     image: NODE_EXPORTER_TAG
-    cgroupsPath: /eve/services/node_explorer
+    cgroupsPath: /eve/services/node-exporter
     oomScoreAdj: -999
 files:
   - path: /etc/eve-release
