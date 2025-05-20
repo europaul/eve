@@ -1,0 +1,16 @@
+image: eve-vector
+org: lfedge
+config:
+  binds:
+    - /:/hostfs
+    - /proc:/hostfs/proc
+    - /sys:/hostfs/sys
+    - /dev:/dev
+    - /run:/run
+    - /etc/resolv.conf:/etc/resolv.conf
+    - /persist:/persist
+    - /config:/config:ro
+  capabilities:
+    - all
+  net: host
+  pid: host

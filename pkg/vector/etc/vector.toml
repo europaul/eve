@@ -1,0 +1,51 @@
+# Persist Vector’s state (disk buffers, checkpoints, etc.) here
+data_dir = "/persist/vector/metrics"
+
+########################################
+# 1) scrape node_exporter every 5s
+########################################
+[sources.node_exporter]
+type                  = "prometheus_scrape"
+endpoints             = [ "http://localhost:9100/metrics" ]
+scrape_interval_secs  = 5
+
+# Attach the same labels you had under static_configs.labels
+[transforms.node_exporter_labels]
+type    = "remap"           # VRL-based label injection
+inputs  = [ "node_exporter" ]
+source  = '''
+.tags.environment = "eve"
+.tags.job         = "node_exporter"
+'''
+
+########################################
+# 2) scrape your pillar endpoint every 5s
+########################################
+[sources.pillar]
+type                  = "prometheus_scrape"
+endpoints             = [ "http://localhost:6543/metrics" ]
+scrape_interval_secs  = 5
+
+[transforms.pillar_labels]
+type    = "remap"
+inputs  = [ "pillar" ]
+source  = '''
+.tags.environment = "eve"
+.tags.job         = "pillar"
+'''
+
+########################################
+# 3) remote-write all metrics
+########################################
+[sinks.remote_write]
+type        = "prometheus_remote_write"
+inputs      = [ "node_exporter_labels", "pillar_labels" ]
+endpoint    = "http://localhost:8999/api/v1/push"
+
+# Buffer up to ~100 MiB on disk under data_dir; block when full
+buffer.type      = "disk"
+buffer.max_size  = 268435488
+buffer.when_full = "block"
+
+# (Optional) fine-tune batching/compression here
+compression = "snappy"
