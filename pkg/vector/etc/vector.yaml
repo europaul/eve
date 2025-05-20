@@ -1,0 +1,71 @@
+sources:
+  dev_keep:
+    type: socket
+    mode: unix_stream       # listen on a Unix domain stream socket
+    path: /run/devKeep.sock  # the UDS file to bind to
+
+  dev_upload:
+    type: socket
+    mode: unix_stream
+    path: /run/devUpload.sock
+
+  vector_logs:
+    type: internal_logs
+
+transforms:
+  # Parse each incoming line as JSON
+  parse_json_keep:
+    type: remap
+    inputs:
+      - dev_keep
+    source: |
+      . = parse_json!(.message)  # replace the event with the parsed JSON object
+
+  filter_zedagent_keep:
+    type: filter
+    inputs:
+      - parse_json_keep
+    condition: |
+      .source == "zedagent"     # only keep events where source=="zedagent"
+
+  # Same pipeline for the second socket
+  parse_json_upload:
+    type: remap
+    inputs:
+      - dev_upload
+    source: |
+      . = parse_json!(.message)
+
+  filter_zedagent_upload:
+    type: filter
+    inputs:
+      - parse_json_upload
+    condition: |
+      .source == "zedagent"
+
+sinks:
+  keep_sent_queue:
+    type: file
+    inputs:
+      - filter_zedagent_keep
+    path: "/persist/vector/keepSentQueue/zedagent-%Y-%m-%d.log.gz"
+    compression: gzip          # compress output with gzip
+    encoding:
+      codec: json              # write events as JSON objects
+
+  dev_upload_file:
+    type: file
+    inputs:
+      - filter_zedagent_upload
+    path: "/persist/vector/devUpload/zedagent-%Y-%m-%d.log.gz"
+    compression: gzip
+    encoding:
+      codec: json
+
+  vector_logs_to_file:
+    type: file
+    inputs:
+      - vector_logs
+    path: "/persist/vector/logs/%Y-%m-%d.log"
+    encoding:
+      codec: json
