@@ -1,4 +1,4 @@
-FROM victoriametrics/vmagent:latest
+FROM victoriametrics/vmagent:v1.117.1
 
 # Copy your local vmagent config into the container
 COPY etc/vmagent.yml /etc/vmagent.yml
