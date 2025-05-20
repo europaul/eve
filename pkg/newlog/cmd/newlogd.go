@@ -55,7 +55,8 @@ var (
 	symlinkFile  = collectDir + "/current.device.log"
 	tmpSymlink   = collectDir + "/tmp-sym.dev.log"
 
-	logmetrics    types.NewlogMetrics // the log metric, publishes to zedagent
+	logmetrics types.NewlogMetrics // the log metric, publishes to zedagent
+
 	devMetaData   devMeta
 	syncToFileCnt int    // every 'N' log event count flush to log file
 	persistMbytes uint64 // '/persist' disk space total in Mbytes

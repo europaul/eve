@@ -77,6 +77,23 @@ func writelogFile(logChan <-chan inputEntry, moveChan chan fileChanInfo) {
 	appStatsMap = make(map[string]statsLogFile)
 	checklogTimer := time.NewTimer(5 * time.Second)
 
+	// create file /persist/newlogd/all.log to keep all log entries
+	allLogFile := filepath.Join("/", "persist", "newlog", "all.log")
+	allLog, err := os.OpenFile(allLogFile, os.O_WRONLY|os.O_APPEND|os.O_CREATE, 0644)
+	if err != nil {
+		log.Fatalf("writelogFile: could not open all.log file %s: %v", allLogFile, err)
+	}
+	defer allLog.Close()
+
+	uploadSockWriter := NewSocketWriter(uploadSockVectorSource, 1000, 5*time.Second)
+	keepSockWriter := NewSocketWriter(keepSockVectorSource, 1000, 5*time.Second)
+
+	fromVectorKeepChan := make(chan string, 5)
+	fromVectorUploadChan := make(chan string, 5)
+
+	go listenOnSocketAndWriteToChan(uploadSockVectorSink, fromVectorUploadChan)
+	go listenOnSocketAndWriteToChan(keepSockVectorSink, fromVectorKeepChan)
+
 	timeIdx := 0
 	for {
 		select {
@@ -105,6 +122,7 @@ func writelogFile(logChan <-chan inputEntry, moveChan chan fileChanInfo) {
 			mapJentry, _ := json.Marshal(&mapLog)
 			logline := string(mapJentry) + "\n"
 			if appuuid != "" {
+				// TODO: this also needs to go through vector
 				bytesWritten := writelogEntry(&appM, logline)
 
 				logmetrics.AppMetrics.NumBytesWrite += uint64(bytesWritten)
@@ -113,18 +131,35 @@ func writelogFile(logChan <-chan inputEntry, moveChan chan fileChanInfo) {
 				trigMoveToGzip(&appM, appuuid, moveChan, false)
 
 			} else {
-				if entry.sendToRemote {
-					writelogEntry(&devStatsUpload, logline)
+				// write the logline to file /persist/newlogd/all.log
+				if _, err := allLog.WriteString(logline); err != nil {
+					log.Errorf("writelogFile: could not write to all.log file %s: %v", allLogFile, err)
+				}
 
-					trigMoveToGzip(&devStatsUpload, "", moveChan, false)
+				if entry.sendToRemote {
+					uploadSockWriter.Write([]byte(logline))
 				}
 
 				// write all log entries to the log file to keep
-				n := writelogEntry(&devStatsKeep, logline)
-				updateDevInputlogStats(entry.source, uint64(n))
-
-				trigMoveToGzip(&devStatsKeep, "", moveChan, false)
+				keepSockWriter.Write([]byte(logline))
 			}
+		case logline := <-fromVectorUploadChan:
+			writelogEntry(&devStatsUpload, logline)
+
+			trigMoveToGzip(&devStatsUpload, "", moveChan, false)
+
+		case logline := <-fromVectorKeepChan:
+			n := writelogEntry(&devStatsKeep, logline)
+
+			var entry inputEntry
+			// parse the logline to get the source
+			if err := json.Unmarshal([]byte(logline), &entry); err != nil {
+				log.Errorf("writelogFile: could not parse logline %s: %v", logline, err)
+			} else {
+				updateDevInputlogStats(entry.source, uint64(n))
+			}
+
+			trigMoveToGzip(&devStatsKeep, "", moveChan, false)
 		}
 	}
 }
