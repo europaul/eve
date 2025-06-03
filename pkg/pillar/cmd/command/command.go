@@ -35,6 +35,8 @@
 
 package command
 
+// Test
+
 import (
 	"bufio"
 	"flag"
