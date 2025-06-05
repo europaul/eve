@@ -2,33 +2,24 @@ sources:
   dev_keep:
     type: socket
     mode: unix_stream       # listen on a Unix domain stream socket
-    path: /run/devKeep.sock  # the UDS file to bind to
+    path: /run/devKeep_source.sock  # the UDS file to bind to
 
   dev_upload:
     type: socket
     mode: unix_stream
-    path: /run/devUpload.sock
+    path: /run/devUpload_source.sock
 
-  vector_logs:
-    type: internal_logs
+  # vector_logs:
+  #   type: internal_logs
 
 transforms:
-  # Parse each incoming line as JSON
   parse_json_keep:
     type: remap
     inputs:
       - dev_keep
     source: |
-      . = parse_json!(.message)  # replace the event with the parsed JSON object
+      . = .message
 
-  filter_zedagent_keep:
-    type: filter
-    inputs:
-      - parse_json_keep
-    condition: |
-      .source == "zedagent"     # only keep events where source=="zedagent"
-
-  # Same pipeline for the second socket
   parse_json_upload:
     type: remap
     inputs:
@@ -36,19 +27,23 @@ transforms:
     source: |
       . = parse_json!(.message)
 
-  filter_zedagent_upload:
+  filter_upload:
     type: filter
     inputs:
       - parse_json_upload
     condition: |
-      .source == "zedagent"
+      # Coerce `.source` to a string; if it fails, use "".
+      src = to_string(.source) ?? "";
+
+      # Now `src` is always a valid string (possibly empty).
+      starts_with(src, "vector") || starts_with(src, "newlog")
 
 sinks:
-  keep_sent_queue:
+  keep_sent_queue_file:
     type: file
     inputs:
-      - filter_zedagent_keep
-    path: "/persist/vector/keepSentQueue/zedagent-%Y-%m-%d.log.gz"
+      - dev_keep
+    path: "/persist/vector/keepSentQueue/dev.log.keep.%Y-%m-%d.log.gz"
     compression: gzip          # compress output with gzip
     encoding:
       codec: json              # write events as JSON objects
@@ -56,16 +51,42 @@ sinks:
   dev_upload_file:
     type: file
     inputs:
-      - filter_zedagent_upload
-    path: "/persist/vector/devUpload/zedagent-%Y-%m-%d.log.gz"
+      - filter_upload
+    path: "/persist/vector/devUpload/dev.log.upload.%Y-%m-%d.log.gz"
     compression: gzip
     encoding:
       codec: json
 
-  vector_logs_to_file:
-    type: file
+  keep_sent_queue_socket:
+    type: socket
     inputs:
-      - vector_logs
-    path: "/persist/vector/logs/%Y-%m-%d.log"
+      - parse_json_keep
+    mode: unix_stream
+    path: "/run/devKeep_sink.sock"
+    encoding:
+      codec: json              # write events as JSON objects
+    buffer:
+      type: disk
+      max_size: 268435488  # 256 MB
+      when_full: block
+
+  dev_upload_socket:
+    type: socket
+    inputs:
+      - filter_upload
+    mode: unix_stream
+    path: "/run/devUpload_sink.sock"
     encoding:
       codec: json
+    buffer:
+      type: disk
+      max_size: 268435488  # 256 MB
+      when_full: block
+
+  # vector_logs_to_file:
+  #   type: file
+  #   inputs:
+  #     - vector_logs
+  #   path: "/persist/vector/logs/%Y-%m-%d.log"
+  #   encoding:
+  #     codec: json
