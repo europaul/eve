@@ -2,12 +2,12 @@ sources:
   dev_keep:
     type: socket
     mode: unix_stream       # listen on a Unix domain stream socket
-    path: /run/devKeep_source.sock  # the UDS file to bind to
+    path: "${DEV_KEEP_SOURCE_SOCK:-/run/devKeep_source.sock}"  # the UDS file to bind to
 
   dev_upload:
     type: socket
     mode: unix_stream
-    path: /run/devUpload_source.sock
+    path: "${DEV_UPLOAD_SOURCE_SOCK:-/run/devUpload_source.sock}"
 
   # vector_logs:
   #   type: internal_logs
@@ -18,7 +18,7 @@ transforms:
     inputs:
       - dev_keep
     source: |
-      . = .message
+      . = parse_json!(.message)
 
   parse_json_upload:
     type: remap
@@ -62,7 +62,7 @@ sinks:
     inputs:
       - parse_json_keep
     mode: unix_stream
-    path: "/run/devKeep_sink.sock"
+    path: "${DEV_KEEP_SINK_SOCK:-/run/devKeep_sink.sock}"
     encoding:
       codec: json              # write events as JSON objects
     buffer:
@@ -75,7 +75,7 @@ sinks:
     inputs:
       - filter_upload
     mode: unix_stream
-    path: "/run/devUpload_sink.sock"
+    path: "${DEV_UPLOAD_SINK_SOCK:-/run/devUpload_sink.sock}"
     encoding:
       codec: json
     buffer:
