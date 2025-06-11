@@ -4,6 +4,7 @@
 package types
 
 import (
+	"encoding/base64"
 	"fmt"
 	"regexp"
 	"strconv"
@@ -329,6 +330,8 @@ const (
 	LogFilenamesToCount GlobalSettingKey = "log.count.filenames"
 	// LogFilenamesToFilter a comma-separated list of log filenames to filter
 	LogFilenamesToFilter GlobalSettingKey = "log.filter.filenames"
+	// VectorConfig is a full base64-encoded configuration for Vector in yaml format.
+	VectorConfig GlobalSettingKey = "vector.config"
 
 	// DisableDHCPAllOnesNetMask option is deprecated and has no effect.
 	// Zedrouter no longer uses the all-ones netmask as it adds unnecessary complexity,
@@ -1067,6 +1070,7 @@ func NewConfigItemSpecMap() ConfigItemSpecMap {
 	configItemSpecMap.AddIntItem(LogDedupWindowSize, 0, 0, 0xFFFFFFFF)
 	configItemSpecMap.AddStringItem(LogFilenamesToCount, "", blankValidator)
 	configItemSpecMap.AddStringItem(LogFilenamesToFilter, "", blankValidator)
+	configItemSpecMap.AddStringItem(VectorConfig, "", base64Validator)
 
 	// Add Agent Settings
 	configItemSpecMap.AddAgentSettingStringItem(LogLevel, "info", validateLogLevel)
@@ -1111,6 +1115,14 @@ func validateSyslogKernelLevel(level string) error {
 
 // blankValidator - A validator that accepts any string
 func blankValidator(s string) error {
+	return nil
+}
+
+func base64Validator(s string) error {
+	_, err := base64.StdEncoding.DecodeString(s)
+	if err != nil {
+		return fmt.Errorf("base64Validator: %s is not a valid base64 string: %v", s, err)
+	}
 	return nil
 }
 
