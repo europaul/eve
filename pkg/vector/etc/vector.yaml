@@ -1,16 +1,22 @@
+api:
+  enabled: true
+
 sources:
   dev_keep:
     type: socket
-    mode: unix_stream       # listen on a Unix domain stream socket
-    path: "${DEV_KEEP_SOURCE_SOCK:-/run/devKeep_source.sock}"  # the UDS file to bind to
+    mode: unix_stream # listen on a Unix domain stream socket
+    path: "${DEV_KEEP_SOURCE_SOCK:-/run/devKeep_source.sock}" # the UDS file to bind to
 
   dev_upload:
     type: socket
     mode: unix_stream
     path: "${DEV_UPLOAD_SOURCE_SOCK:-/run/devUpload_source.sock}"
 
-  # vector_logs:
-  #   type: internal_logs
+  vector_metrics:
+    type: internal_metrics
+
+  vector_logs:
+    type: internal_logs
 
 transforms:
   parse_json_keep:
@@ -27,31 +33,61 @@ transforms:
     source: |
       . = parse_json!(.message)
 
-  filter_upload:
+  drop_hwhealth_errors:
     type: filter
     inputs:
       - parse_json_upload
     condition: |
-      # Coerce `.source` to a string; if it fails, use "".
-      src = to_string(.source) ?? "";
+      # Safely get .content as a string (empty if missing/invalid)
+      c = to_string(.content) ?? "";
+      cont = parse_json!(c);
 
-      # Now `src` is always a valid string (possibly empty).
-      starts_with(src, "vector") || starts_with(src, "newlog")
+      # Drop any line mentioning “All attempts to connect to …hardwarehealth failed”
+      # by _negating_ a regex match:
+      !match(string!(cont.msg), r'All attempts to connect to .*hardwarehealth failed')
+
+  # filter_errors:
+  #   type: filter
+  #   inputs:
+  #     - parse_json_upload
+  #   condition: |
+  #     # Filter out events that are not errors.
+  #     # This assumes the JSON has a field `severity` that indicates the log level.
+  #     .severity == "error" || .severity == "err" || .severity == "critical" || .severity == "fatal"
+
+  # dedup_upload:
+  #   type: dedupe
+  #   inputs:
+  #     - filter_errors
+  #   fields.match:
+  #     - "content"  # deduplicate based on the `content` field
+
+  # filter_upload:
+  #   type: filter
+  #   inputs:
+  #     - dedup_upload
+  #   condition: |
+  #     # Coerce `.source` to a string; if it fails, use "".
+  #     src = to_string(.source) ?? "";
+
+  #     # Now `src` is always a valid string (possibly empty).
+  #     src == "zedagent"
+  #     # starts_with(src, "vector") || starts_with(src, "newlog")
 
 sinks:
   keep_sent_queue_file:
     type: file
     inputs:
-      - dev_keep
+      - parse_json_keep
     path: "/persist/vector/keepSentQueue/dev.log.keep.%Y-%m-%d.log.gz"
-    compression: gzip          # compress output with gzip
+    compression: gzip # compress output with gzip
     encoding:
-      codec: json              # write events as JSON objects
+      codec: json # write events as JSON objects
 
   dev_upload_file:
     type: file
     inputs:
-      - filter_upload
+      - parse_json_upload
     path: "/persist/vector/devUpload/dev.log.upload.%Y-%m-%d.log.gz"
     compression: gzip
     encoding:
@@ -64,29 +100,36 @@ sinks:
     mode: unix_stream
     path: "${DEV_KEEP_SINK_SOCK:-/run/devKeep_sink.sock}"
     encoding:
-      codec: json              # write events as JSON objects
+      codec: json # write events as JSON objects
     buffer:
       type: disk
-      max_size: 268435488  # 256 MB
+      max_size: 268435488 # 256 MB
       when_full: block
 
   dev_upload_socket:
     type: socket
     inputs:
-      - filter_upload
+      - drop_hwhealth_errors
     mode: unix_stream
     path: "${DEV_UPLOAD_SINK_SOCK:-/run/devUpload_sink.sock}"
     encoding:
       codec: json
     buffer:
       type: disk
-      max_size: 268435488  # 256 MB
+      max_size: 268435488 # 256 MB
       when_full: block
 
-  # vector_logs_to_file:
-  #   type: file
-  #   inputs:
-  #     - vector_logs
-  #   path: "/persist/vector/logs/%Y-%m-%d.log"
-  #   encoding:
-  #     codec: json
+  prometheus:
+    type: prometheus_exporter
+    inputs:
+      - vector_metrics
+    address: "0.0.0.0:8889"
+    namespace: "vector"
+
+  vector_logs_to_file:
+    type: file
+    inputs:
+      - vector_logs
+    path: "/persist/vector/internal.log"
+    encoding:
+      codec: json

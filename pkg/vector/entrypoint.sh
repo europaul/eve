@@ -4,9 +4,10 @@ mkdir -p /persist/vector/config
 cp /etc/vector/vector.yaml /persist/vector/config/vector.yaml
 
 export VECTOR_LOG="vector=info,vector::sources::util::unix_stream=warn"
-export VECTOR_LOG_FORMAT="json"
+export VECTOR_LOG_FORMAT="text"
 export VECTOR_WATCH_CONFIG="true"
 export VECTOR_CONFIG="/persist/vector/config/vector.yaml"
+export ALLOCATION_TRACING="true"
 
 while true; do
     # vector 2>&1 | tee -a /persist/vector/vector.log
