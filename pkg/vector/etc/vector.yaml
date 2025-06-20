@@ -40,11 +40,16 @@ transforms:
     condition: |
       # Safely get .content as a string (empty if missing/invalid)
       c = to_string(.content) ?? "";
-      cont = parse_json!(c);
+      cont = parse_json(c) ?? null;
 
-      # Drop any line mentioning “All attempts to connect to …hardwarehealth failed”
-      # by _negating_ a regex match:
-      !match(string!(cont.msg), r'All attempts to connect to .*hardwarehealth failed')
+      if is_null(cont) {
+        # If parsing failed, we can't filter it out, so keep it.
+        return true;
+      } else {
+        # Drop any line mentioning “All attempts to connect to …hardwarehealth failed”
+        # by _negating_ a regex match:
+        !match(string!(cont.msg), r'All attempts to connect to .*hardwarehealth failed')
+      }
 
   # filter_errors:
   #   type: filter
