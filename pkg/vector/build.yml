@@ -1,5 +1,6 @@
 image: eve-vector
 org: lfedge
+network: yes
 config:
   binds:
     - /dev:/dev
