@@ -26,6 +26,17 @@ transforms:
     source: |
       . = parse_json!(.message)
 
+  throttle_errors:
+    type: throttle
+    inputs:
+      - parse_json_keep
+    threshold: 1
+    window_secs: 60
+    exclude: .severity != "error"
+    key_field: "{{ filename }}"
+    internal_metrics:
+      emit_events_discarded_per_key: true
+
   parse_json_upload:
     type: remap
     inputs:
@@ -101,7 +112,7 @@ sinks:
   keep_sent_queue_socket:
     type: socket
     inputs:
-      - parse_json_keep
+      - throttle_errors
     mode: unix_stream
     path: "${DEV_KEEP_SINK_SOCK:-/run/devKeep_sink.sock}"
     encoding:
