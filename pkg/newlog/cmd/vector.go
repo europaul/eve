@@ -19,8 +19,8 @@ var (
 	uploadSockVectorSink   = "/run/devUpload_sink.sock"
 	keepSockVectorSink     = "/run/devKeep_sink.sock"
 
-	vectorConfigPath       = "/persist/vector/config/vector.yaml"
-	vectorConfigBackupPath = "/persist/vector/config/vector.yaml.bak"
+	defaultConfigPath = "/etc/vector/vector.yaml"
+	vectorConfigPath  = "/persist/vector/config/vector.yaml.new"
 )
 
 type bufferedSockWriter struct {
@@ -184,21 +184,29 @@ func writeVectorConfig(text []byte) error {
 }
 
 func handleVectorConfig(config string) error {
-	// vector.config parameter is in base64 encoded format
-	decodedConfig, err := base64.StdEncoding.DecodeString(config)
-	if err != nil {
-		return fmt.Errorf("failed to decode vector config: %w", err)
+	if config == "" {
+		log.Noticef("No vector config provided, setting up default configuration")
+		// Copy the default vector config from default location
+		defaultConfig, err := os.ReadFile(defaultConfigPath)
+		if err != nil {
+			return fmt.Errorf("failed to read default vector config: %w", err)
+		}
+		if err := writeVectorConfig(defaultConfig); err != nil {
+			return fmt.Errorf("failed to write default vector config: %w", err)
+		}
+		log.Functionf("wrote default vector config to %s", vectorConfigPath)
+	} else {
+		// vector.config parameter is in base64 encoded format
+		decodedConfig, err := base64.StdEncoding.DecodeString(config)
+		if err != nil {
+			return fmt.Errorf("failed to decode vector config: %w", err)
+		}
+		// write the decoded config to vector config file
+		if err := writeVectorConfig(decodedConfig); err != nil {
+			return fmt.Errorf("failed to write vector config: %w", err)
+		}
+		log.Functionf("wrote vector config to %s", vectorConfigPath)
 	}
-	// backup the old vector config
-	if err := os.Rename(vectorConfigPath, vectorConfigBackupPath); err != nil {
-		return fmt.Errorf("failed to backup vector config: %w", err)
-	}
-	log.Functionf("renamed old vector config to %s", vectorConfigBackupPath)
-	// write the decoded config to vector config file
-	if err := writeVectorConfig(decodedConfig); err != nil {
-		return fmt.Errorf("failed to write vector config: %w", err)
-	}
-	log.Functionf("wrote vector config to %s", vectorConfigPath)
 
 	return nil
 }
