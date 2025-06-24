@@ -3,7 +3,6 @@ package main
 import (
 	"bufio"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"net"
 	"os"
@@ -122,44 +121,6 @@ func handleIncomingConnection(conn net.Conn, sendToChan chan<- string) {
 	if err := scanner.Err(); err != nil {
 		log.Errorf("handleIncomingConnection: scanner error for socket: %v", err)
 	}
-}
-
-type transformConfig struct {
-	Type      string
-	Inputs    []string
-	Condition string
-}
-
-func writeTransformConfig(condition string) error {
-	config := transformConfig{
-		Type:      "filter",
-		Inputs:    []string{"dev_upload_paser"},
-		Condition: condition,
-	}
-
-	configBytes, err := json.Marshal(config)
-	if err != nil {
-		return fmt.Errorf("failed to marshal transform config: %w", err)
-	}
-
-	// Create the directory if it doesn't exist
-	if err := os.MkdirAll("/persist/vector/config/transforms", 0755); err != nil {
-		return fmt.Errorf("failed to create transforms directory: %w", err)
-	}
-
-	configFile, err := os.OpenFile("/persist/vector/config/transforms/dev_upload_filter.json", os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
-	if err != nil {
-		return fmt.Errorf("failed to open transform config file: %w", err)
-	}
-	defer configFile.Close()
-
-	_, err = configFile.Write(configBytes)
-	if err != nil {
-		return fmt.Errorf("failed to write transform config: %w", err)
-	}
-
-	log.Noticef("Transform config written successfully: %s", string(configBytes))
-	return nil
 }
 
 func writeVectorConfig(text []byte) error {
