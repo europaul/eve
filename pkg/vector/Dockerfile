@@ -1,5 +1,4 @@
-FROM timberio/vector:0.47.0-alpine
-# FROM paulzededa/eve-vector:transforms-logs
+FROM lfedge/eve-vector-base:X
 
 RUN apk add --no-cache inotify-tools
 
