@@ -915,6 +915,8 @@ func sendToCloud(ctx *loguploaderContext, data []byte, iter int, fName string, f
 				}
 				handle4xxlogfile(ctx, fName, isApp)
 			}
+			log.Noticef("sendToCloud got: headers: %s, code %d, content %s",
+				rv.HTTPResp.Header, rv.HTTPResp.StatusCode, string(rv.RespContents))
 			sentFailed = true
 			log.Tracef("sendToCloud: sent failed, content %s", string(rv.RespContents))
 		}
