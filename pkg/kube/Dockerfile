@@ -1,7 +1,6 @@
 # syntax=docker/dockerfile-upstream:1.5.0-rc2-labs
 
-FROM lfedge/eve-alpine:e799def68af51dba83ec5a41f34bd0109704574f AS build
-ENV BUILD_PKGS go
+FROM lfedge/eve-alpine:c10ebf71824dbb645dd6eb0a012cf3c804281642 AS build
 ENV PKGS alpine-baselayout musl-utils iproute2 iptables curl openrc \
          open-iscsi libvirt libvirt-client util-linux grep findutils jq \
          cni-plugins nfs-utils

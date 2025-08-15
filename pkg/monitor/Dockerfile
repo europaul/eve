@@ -49,7 +49,7 @@ RUN cargo sbom > sbom.spdx.json
 RUN cp /app/target/$CARGO_BUILD_TARGET/release/monitor /app/target/
 
 
-FROM lfedge/eve-alpine:e799def68af51dba83ec5a41f34bd0109704574f AS runtime
+FROM lfedge/eve-alpine:c10ebf71824dbb645dd6eb0a012cf3c804281642 AS runtime
 ENV PKGS="kbd pciutils usbutils"
 RUN eve-alpine-deploy.sh
 

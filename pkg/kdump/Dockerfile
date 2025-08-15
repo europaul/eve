@@ -1,6 +1,6 @@
 # Copyright (c) 2023 Zededa, Inc.
 # SPDX-License-Identifier: Apache-2.0
-FROM lfedge/eve-alpine:e799def68af51dba83ec5a41f34bd0109704574f AS build
+FROM lfedge/eve-alpine:c10ebf71824dbb645dd6eb0a012cf3c804281642 AS build
 
 ENV BUILD_PKGS patch curl make gcc perl util-linux-dev git mtools linux-headers musl-dev xz-dev elfutils-dev libbz2
 ENV PKGS xz-libs elfutils-dev libbz2

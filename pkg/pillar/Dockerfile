@@ -4,14 +4,14 @@
 # Dockerfile to build pillar
 
 # use the same set of packages for simplicity
-ARG BUILD_PKGS_BASE="git gcc linux-headers libc-dev make linux-pam-dev m4 findutils go util-linux make patch \
+ARG BUILD_PKGS_BASE="git gcc linux-headers libc-dev make linux-pam-dev m4 findutils util-linux make patch \
                      libintl libuuid libtirpc libblkid libcrypto1.1 zlib tar"
 
 # we use the same image in several places
-ARG EVE_ALPINE_IMAGE=lfedge/eve-alpine:e799def68af51dba83ec5a41f34bd0109704574f
+ARG EVE_ALPINE_IMAGE=lfedge/eve-alpine:c10ebf71824dbb645dd6eb0a012cf3c804281642
 
-FROM lfedge/eve-uefi:d31bc38759b0e3548284132dd1524a360621296d AS uefi-build
-FROM lfedge/eve-dom0-ztools:10f26732c697a32706ed749c5d4314c0468a95c9 AS zfs
+FROM lfedge/eve-uefi:6950d2d48d80b575dcf62a2575a70e76a2cf3b4e AS uefi-build
+FROM lfedge/eve-dom0-ztools:dbfd8799be9ddd033cae3a543d63129e6e138655 AS zfs
 RUN mkdir /out
 # copy zfs-related files from dom0-ztools using prepared list of files
 RUN while read -r x; do \
@@ -33,7 +33,7 @@ ARG BUILD_PKGS_BASE
 RUN BUILD_PKGS="${BUILD_PKGS_BASE}" eve-alpine-deploy.sh
 
 # hadolint ignore=DL3029
-FROM --platform=${BUILDPLATFORM} lfedge/eve-cross-compilers:871591942d8fe4b28b129b10cc63bd8052db81b9 AS cross-compilers
+FROM --platform=${BUILDPLATFORM} lfedge/eve-cross-compilers:0d05eeb7a32d94900d5b796aa5dfa39ef703f42d AS cross-compilers
 
 # will use several packages from target arch and copy them to sysroot
 # hadolint ignore=DL3006
@@ -137,9 +137,9 @@ RUN --mount=type=cache,target=/root/.cache/go-build if [ "${TEST_TOOLS}" = "y" ]
     GOBIN=/final/opt/ GOFLAGS="" go install gotest.tools/gotestsum@v1.7.0; \
 fi
 
-FROM lfedge/eve-fscrypt:6e3d54a6a18dedcf425271e0c35e140510afba3d AS fscrypt
-FROM lfedge/eve-dnsmasq:ce9e18006f571de5e7d043e2111a02cffcc69f78 AS dnsmasq
-FROM lfedge/eve-gpt-tools:e42241d0feb04edf4efb11ca7d007f0a2908221d AS gpttools
+FROM lfedge/eve-fscrypt:e5e356041cefa73e328ec0de332ac80fcf1d8e0c AS fscrypt
+FROM lfedge/eve-dnsmasq:66267fc33aefdc50ad6006868114f26cd24a3a85 AS dnsmasq
+FROM lfedge/eve-gpt-tools:5c8fdf35cb72797c04edd23abeded0cf004fd10a AS gpttools
 
 # collector collects everything together and then does any processing like stripping binaries.
 # We use this interim "collector" so that we can do processing.

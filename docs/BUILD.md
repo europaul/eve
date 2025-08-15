@@ -557,7 +557,7 @@ A typical EVE Dockerfile drving the build will start from something like:
 FROM lfedge/eve-alpine:XXX as build
 ENV PKGS foo bar
 ENV PKGS_arm64 baz-for-arm
-ENV BUILD_PKGS gcc go
+ENV BUILD_PKGS gcc
 RUN eve-alpine-deploy.sh
 ...
 FROM scratch

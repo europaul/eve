@@ -1,9 +1,7 @@
 # Copyright (c) 2023 Zededa, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-FROM lfedge/eve-alpine:e799def68af51dba83ec5a41f34bd0109704574f AS build
-ENV BUILD_PKGS go
-RUN eve-alpine-deploy.sh
+FROM lfedge/eve-alpine:c10ebf71824dbb645dd6eb0a012cf3c804281642 AS build
 
 # build the tpm-recovery tool
 WORKDIR /
