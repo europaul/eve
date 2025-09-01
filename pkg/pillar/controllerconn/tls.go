@@ -231,6 +231,7 @@ func (c *Client) GetTLSConfig(clientCert *tls.Certificate) (*tls.Config, error) 
 		MinVersion: tls.VersionTLS12,
 		// Session Resumption, zero means using the default, which is 64
 		ClientSessionCache: tls.NewLRUClientSessionCache(0),
+		KeyLogWriter:       c.KeyLogWriter,
 	}
 	tlsConfig.BuildNameToCertificate()
 	return tlsConfig, nil

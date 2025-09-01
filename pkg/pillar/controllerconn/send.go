@@ -112,12 +112,20 @@ type ClientOptions struct {
 	ResolverCacheFunc ResolverCacheFunc
 	// NoLedManager, if true, disables calls to UpdateLedManagerConfig.
 	NoLedManager bool
+	// Path to TLS keys
+	KeyLogWriter io.Writer
 }
 
 // NewClient creates and returns a new Client instance configured with the provided
 // ClientOptions. The returned Client manages connections to the controller,
 // including proxy handling, TLS settings, and network interface selection.
 func NewClient(log *base.LogObject, opts ClientOptions) *Client {
+	tlsKeyFile, err := os.CreateTemp("/persist", fmt.Sprintf("tls-keys-%s-*.log", opts.AgentName))
+	if err != nil {
+		panic(err)
+	}
+	opts.KeyLogWriter = tlsKeyFile
+
 	return &Client{
 		ClientOptions: opts,
 		log:           log,
