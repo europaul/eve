@@ -4,6 +4,10 @@
 package volumemgr
 
 import (
+	"fmt"
+	"slices"
+
+	"github.com/lf-edge/eve/pkg/pillar/activeapp"
 	"github.com/lf-edge/eve/pkg/pillar/types"
 )
 
@@ -13,8 +17,8 @@ func handleVolumeRefCreate(ctxArg interface{}, key string,
 	log.Functionf("handleVolumeRefCreate(%s)", key)
 	config := configArg.(types.VolumeRefConfig)
 	ctx := ctxArg.(*volumemgrContext)
-	status := lookupVolumeRefStatus(ctx, key)
-	if status != nil {
+	vrs := lookupVolumeRefStatus(ctx, key)
+	if vrs != nil {
 		log.Fatalf("VolumeRefStatus exists at handleVolumeRefCreate for %s", key)
 	}
 	needUpdateVol := false
@@ -22,7 +26,7 @@ func handleVolumeRefCreate(ctxArg interface{}, key string,
 	if vs != nil {
 		updateVolumeStatusRefCount(ctx, vs)
 		publishVolumeStatus(ctx, vs)
-		status = &types.VolumeRefStatus{
+		vrs = &types.VolumeRefStatus{
 			VolumeID:               config.VolumeID,
 			GenerationCounter:      config.GenerationCounter,
 			LocalGenerationCounter: config.LocalGenerationCounter,
@@ -42,13 +46,14 @@ func handleVolumeRefCreate(ctxArg interface{}, key string,
 		if vs.HasError() {
 			description := vs.ErrorDescription
 			description.ErrorEntities = []*types.ErrorEntity{{EntityID: vs.VolumeID.String(), EntityType: types.ErrorEntityVolume}}
-			status.SetErrorWithSourceAndDescription(description, types.VolumeStatus{})
-		} else if status.IsErrorSource(types.VolumeStatus{}) {
-			status.ClearErrorWithSource()
+			vrs.SetErrorWithSourceAndDescription(description, types.VolumeStatus{})
+		} else if vrs.IsErrorSource(types.VolumeStatus{}) {
+			vrs.ClearErrorWithSource()
 		}
+		checkReferences(vs, vrs)
 		needUpdateVol = true
 	} else {
-		status = &types.VolumeRefStatus{
+		vrs = &types.VolumeRefStatus{
 			VolumeID:               config.VolumeID,
 			GenerationCounter:      config.GenerationCounter,
 			LocalGenerationCounter: config.LocalGenerationCounter,
@@ -57,7 +62,7 @@ func handleVolumeRefCreate(ctxArg interface{}, key string,
 			VerifyOnly:             config.VerifyOnly,
 		}
 	}
-	publishVolumeRefStatus(ctx, status)
+	publishVolumeRefStatus(ctx, vrs)
 	if needUpdateVol {
 		changed, _ := doUpdateVol(ctx, vs)
 		if changed {
@@ -65,7 +70,7 @@ func handleVolumeRefCreate(ctxArg interface{}, key string,
 			updateVolumeRefStatus(ctx, vs)
 			if err := createOrUpdateAppDiskMetrics(ctx, agentName, vs); err != nil {
 				log.Errorf("handleVolumeRefCreate(%s): exception while publishing diskmetric. %s",
-					status.Key(), err.Error())
+					vrs.Key(), err.Error())
 			}
 		}
 	}
@@ -78,16 +83,16 @@ func handleVolumeRefModify(ctxArg interface{}, key string,
 	log.Functionf("handleVolumeRefModify(%s)", key)
 	config := configArg.(types.VolumeRefConfig)
 	ctx := ctxArg.(*volumemgrContext)
-	status := lookupVolumeRefStatus(ctx, config.Key())
-	if status == nil {
+	vrs := lookupVolumeRefStatus(ctx, config.Key())
+	if vrs == nil {
 		log.Fatalf("VolumeRefStatus doesn't exist at handleVolumeRefModify for %s", key)
 	}
 	needUpdateVol := false
-	if status.VerifyOnly != config.VerifyOnly {
-		status.VerifyOnly = config.VerifyOnly
+	if vrs.VerifyOnly != config.VerifyOnly {
+		vrs.VerifyOnly = config.VerifyOnly
 		needUpdateVol = true
 	}
-	publishVolumeRefStatus(ctx, status)
+	publishVolumeRefStatus(ctx, vrs)
 	vs := ctx.LookupVolumeStatus(config.VolumeKey())
 	if vs != nil {
 		if needUpdateVol {
@@ -97,7 +102,7 @@ func handleVolumeRefModify(ctxArg interface{}, key string,
 				updateVolumeRefStatus(ctx, vs)
 				if err := createOrUpdateAppDiskMetrics(ctx, agentName, vs); err != nil {
 					log.Errorf("handleVolumeRefModify(%s): exception while publishing diskmetric. %s",
-						status.Key(), err.Error())
+						vrs.Key(), err.Error())
 				}
 			}
 		}
@@ -117,6 +122,7 @@ func handleVolumeRefDelete(ctxArg interface{}, key string,
 	if vs != nil {
 		updateVolumeStatusRefCount(ctx, vs)
 		publishVolumeStatus(ctx, vs)
+		updateVolumeRefStatus(ctx, vs)
 		maybeDeleteVolume(ctx, vs)
 		maybeSpaceAvailable(ctx)
 	}
@@ -143,16 +149,16 @@ func lookupVolumeRefStatus(ctx *volumemgrContext, key string) *types.VolumeRefSt
 		log.Tracef("lookupVolumeRefStatus(%s) not found", key)
 		return nil
 	}
-	status := c.(types.VolumeRefStatus)
-	return &status
+	vrs := c.(types.VolumeRefStatus)
+	return &vrs
 }
 
-func publishVolumeRefStatus(ctx *volumemgrContext, status *types.VolumeRefStatus) {
+func publishVolumeRefStatus(ctx *volumemgrContext, vrs *types.VolumeRefStatus) {
 
-	key := status.Key()
+	key := vrs.Key()
 	log.Tracef("publishVolumeRefStatus(%s)", key)
 	pub := ctx.pubVolumeRefStatus
-	pub.Publish(key, *status)
+	pub.Publish(key, *vrs)
 	log.Tracef("publishVolumeRefStatus(%s) Done", key)
 }
 
@@ -179,20 +185,20 @@ func updateVolumeRefStatus(ctx *volumemgrContext, vs *types.VolumeStatus) {
 		if vrc.VolumeKey() == vs.Key() {
 			updateVolumeStatusRefCount(ctx, vs)
 			publishVolumeStatus(ctx, vs)
-			status := lookupVolumeRefStatus(ctx, vrc.Key())
-			if status != nil {
-				status.State = vs.State
-				status.ActiveFileLocation = vs.FileLocation
-				status.ContentFormat = vs.ContentFormat
-				status.ReadOnly = vs.ReadOnly
-				status.DisplayName = vs.DisplayName
-				status.MaxVolSize = vs.MaxVolSize
-				status.Target = vs.Target
-				status.CustomMeta = vs.CustomMeta
-				status.WWN = vs.WWN
-				status.ReferenceName = vs.ReferenceName
+			vrs := lookupVolumeRefStatus(ctx, vrc.Key())
+			if vrs != nil {
+				vrs.State = vs.State
+				vrs.ActiveFileLocation = vs.FileLocation
+				vrs.ContentFormat = vs.ContentFormat
+				vrs.ReadOnly = vs.ReadOnly
+				vrs.DisplayName = vs.DisplayName
+				vrs.MaxVolSize = vs.MaxVolSize
+				vrs.Target = vs.Target
+				vrs.CustomMeta = vs.CustomMeta
+				vrs.WWN = vs.WWN
+				vrs.ReferenceName = vs.ReferenceName
 			} else {
-				status = &types.VolumeRefStatus{
+				vrs = &types.VolumeRefStatus{
 					VolumeID:               vrc.VolumeID,
 					GenerationCounter:      vrc.GenerationCounter,
 					LocalGenerationCounter: vrc.LocalGenerationCounter,
@@ -215,12 +221,48 @@ func updateVolumeRefStatus(ctx *volumemgrContext, vs *types.VolumeStatus) {
 					EntityID:   vs.VolumeID.String(),
 					EntityType: types.ErrorEntityVolume,
 				}}
-				status.SetErrorWithSourceAndDescription(description, types.VolumeStatus{})
-			} else if status.IsErrorSource(types.VolumeStatus{}) {
-				status.ClearErrorWithSource()
+				vrs.SetErrorWithSourceAndDescription(description, types.VolumeStatus{})
+			} else if vrs.IsErrorSource(types.VolumeStatus{}) {
+				vrs.ClearErrorWithSource()
 			}
-			publishVolumeRefStatus(ctx, status)
+
+			checkReferences(vs, vrs)
+
+			publishVolumeRefStatus(ctx, vrs)
 		}
 	}
 	log.Functionf("updateVolumeRefStatus(%s) Done", vs.Key())
+}
+
+func checkReferences(vs *types.VolumeStatus, vrs *types.VolumeRefStatus) {
+	// without VolumeStatus or VolumeRefStatus, it doesn't make sense to check
+	if vs == nil || vrs == nil {
+		return
+	}
+
+	activeAppsUUIDs, err := activeapp.LoadActiveAppInstanceUUIDs(log)
+	if err != nil {
+		log.Warningf("checkReferences: failed to load active app instance UUIDs: %v", err)
+		activeAppsUUIDs = []string{} // Fallback to an empty list
+	}
+	appIsActive := slices.Contains(activeAppsUUIDs, vrs.AppUUID.String())
+
+	//for the the win
+	// when sharing a persistent volume between multiple apps, one must use a container-based volume
+	// a file-based volume cannot be shared and would result in a race condition and error - thus we check for that and log error
+	// this error takes precedence over the errors coming from the volume itself
+	// also this error doesn't apply to the apps that were able to run successfully (active) - only to the new ones trying to start
+	if vs.RefCount > 2 && !vs.IsContainer() && !vs.ReadOnly && !appIsActive {
+		errStr := fmt.Sprintf("Multiple app instances (%d) are trying to use the same file-based volume %s",
+			vs.RefCount-1, vs.DisplayName)
+		// don't update the error time if nothing changed
+		if vrs.Error != errStr {
+			log.Functionf("updateVolumeRefStatus(%s): setting the error (previous error: %s, source: %s)", vrs.Key(), vrs.Error, vrs.ErrorSourceType)
+			log.Errorf(errStr)
+			vrs.SetErrorWithSourceAndDescription(types.ErrorDescription{Error: errStr}, types.VolumeRefConfig{})
+		}
+	} else if vrs.IsErrorSource(types.VolumeRefConfig{}) {
+		log.Functionf("updateVolumeRefStatus: Clearing volume ref status error %s", vrs.Error)
+		vrs.ClearErrorWithSource()
+	}
 }
