@@ -247,6 +247,7 @@ func checkReferences(vs *types.VolumeStatus, vrs *types.VolumeRefStatus) {
 	}
 	appIsActive := slices.Contains(activeAppsUUIDs, vrs.AppUUID.String())
 
+	//for the the win
 	// when sharing a persistent volume between multiple apps, one must use a container-based volume
 	// a file-based volume cannot be shared and would result in a race condition and error - thus we check for that and log error
 	// this error takes precedence over the errors coming from the volume itself
