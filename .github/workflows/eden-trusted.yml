@@ -184,40 +184,28 @@ jobs:
     outputs:
       eden_version: ${{ steps.select.outputs.eden_version }}
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
-
       - name: Select Eden version based on target branch
         id: select
         env:
           BASE_REF: ${{ needs.context.outputs.pr_base_ref }}
         run: |
-          MAPPING_FILE=".github/eden-version-map.yml"
-
-          if [[ ! -f "$MAPPING_FILE" ]]; then
-            echo "::error::Eden version mapping file not found: $MAPPING_FILE"
-            exit 1
-          fi
-
           echo "PR target branch: $BASE_REF"
 
-          # Try to get the mapping for the specific branch
-          eden_version=$(yq eval ".\"$BASE_REF\".eden_version" "$MAPPING_FILE")
-
-          # If no specific mapping exists, use the default
-          if [[ "$eden_version" == "null" || -z "$eden_version" ]]; then
-            echo "No specific mapping found for branch '$BASE_REF', using default"
-            eden_version=$(yq eval '.default.eden_version' "$MAPPING_FILE")
-          fi
-
-          # Verify that we have valid values
-          if [[ "$eden_version" == "null" || -z "$eden_version" ]]; then
-            echo "::error::Failed to determine eden_version for branch '$BASE_REF'"
-            exit 1
-          fi
+          # Map EVE branches to Eden versions
+          # LTS branches (13.4-stable, 14.5-stable) use Eden 1.0.9
+          # All other branches use Eden 1.0.13
+          case "$BASE_REF" in
+            "13.4-stable"|"14.5-stable")
+              eden_version="1.0.9"
+              echo "LTS branch detected, using Eden $eden_version"
+              ;;
+            *)
+              eden_version="1.0.13"
+              echo "Using default Eden $eden_version for branch '$BASE_REF'"
+              ;;
+          esac
 
           echo "Selected Eden version: $eden_version"
-
           echo "eden_version=$eden_version" >> "$GITHUB_OUTPUT"
 
 
