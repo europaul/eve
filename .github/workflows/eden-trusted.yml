@@ -209,89 +209,56 @@ jobs:
           echo "eden_version=$eden_version" >> "$GITHUB_OUTPUT"
 
 
-  tests:
+  tests-eden-1_0_9:
     name: ${{ needs.context.outputs.eden_parent_job_title }}
     needs: [context, select_eden_version]
-    if: needs.context.outputs.skip_run == 'false'
+    if: needs.context.outputs.skip_run == 'false' && needs.select_eden_version.outputs.eden_version == '1.0.9'
+    uses: lf-edge/eden/.github/workflows/test.yml@1.0.9
+    secrets: inherit
+    with:
+      eve_image: "evebuild/pr:${{ needs.context.outputs.pr_id }}"
+      eve_log_level: "debug"
+      eve_artifact_name: "eve-${{ needs.context.outputs.hv }}-${{ needs.context.outputs.arch }}-${{ needs.context.outputs.platform }}"
+      artifact_run_id: ${{ needs.context.outputs.original_run_id }}
+      eden_version: "1.0.9"
+
+  tests-eden-1_0_13:
+    name: ${{ needs.context.outputs.eden_parent_job_title }}
+    needs: [context, select_eden_version]
+    if: needs.context.outputs.skip_run == 'false' && needs.select_eden_version.outputs.eden_version == '1.0.13'
+    uses: lf-edge/eden/.github/workflows/test.yml@1.0.13
+    secrets: inherit
+    with:
+      eve_image: "evebuild/pr:${{ needs.context.outputs.pr_id }}"
+      eve_log_level: "debug"
+      eve_artifact_name: "eve-${{ needs.context.outputs.hv }}-${{ needs.context.outputs.arch }}-${{ needs.context.outputs.platform }}"
+      artifact_run_id: ${{ needs.context.outputs.original_run_id }}
+      eden_version: "1.0.13"
+
+  # Aggregate job to represent the test results
+  tests:
+    name: Eden Tests Complete
+    needs: [context, select_eden_version, tests-eden-1_0_9, tests-eden-1_0_13]
+    if: always() && needs.context.outputs.skip_run == 'false'
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Eden tests via repository dispatch
-        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd  # v8.0.0
-        env:
-          EDEN_VERSION: ${{ needs.select_eden_version.outputs.eden_version }}
-          EVE_IMAGE: "evebuild/pr:${{ needs.context.outputs.pr_id }}"
-          EVE_ARTIFACT_NAME: "eve-${{ needs.context.outputs.hv }}-${{ needs.context.outputs.arch }}-${{ needs.context.outputs.platform }}"
-          ARTIFACT_RUN_ID: ${{ needs.context.outputs.original_run_id }}
-        with:
-          script: |
-            const [owner, repo] = 'lf-edge/eden'.split('/');
-            const dispatchResponse = await github.rest.actions.createWorkflowDispatch({
-              owner,
-              repo,
-              workflow_id: 'test.yml',
-              ref: process.env.EDEN_VERSION,
-              inputs: {
-              eve_image: process.env.EVE_IMAGE,
-              eve_log_level: 'debug',
-              eve_artifact_name: process.env.EVE_ARTIFACT_NAME,
-              artifact_run_id: process.env.ARTIFACT_RUN_ID,
-              eden_version: process.env.EDEN_VERSION
-              }
-            });
+      - name: Check test results
+        run: |
+          # Determine which job ran based on the selected version
+          if [[ "${{ needs.select_eden_version.outputs.eden_version }}" == "1.0.9" ]]; then
+            result="${{ needs.tests-eden-1_0_9.result }}"
+          elif [[ "${{ needs.select_eden_version.outputs.eden_version }}" == "1.0.13" ]]; then
+            result="${{ needs.tests-eden-1_0_13.result }}"
+          else
+            echo "::error::Unknown Eden version: ${{ needs.select_eden_version.outputs.eden_version }}"
+            exit 1
+          fi
 
-            // Wait briefly for the workflow run to be created
-            await new Promise(resolve => setTimeout(resolve, 2000));
-
-            // Get the workflow run that was just triggered
-            const { data: runs } = await github.rest.actions.listWorkflowRuns({
-              owner,
-              repo,
-              workflow_id: 'test.yml',
-              branch: process.env.EDEN_VERSION,
-              per_page: 1
-            });
-
-            const triggeredRunId = runs.workflow_runs[0]?.id;
-            if (triggeredRunId) {
-              core.setOutput('eden_run_id', triggeredRunId);
-              console.log(`Triggered Eden workflow run ID: ${triggeredRunId}`);
-            } else {
-              console.log('Warning: Could not retrieve triggered workflow run ID');
-            }
-            });
-
-            // Wait for the Eden workflow to complete
-            console.log('Waiting for Eden workflow to complete...');
-            let workflowCompleted = false;
-            let conclusion = null;
-            const maxWaitTime = 4 * 60 * 60 * 1000; // 4 hours
-            const pollInterval = 30000; // 30 seconds
-            const startTime = Date.now();
-
-            while (!workflowCompleted && (Date.now() - startTime) < maxWaitTime) {
-              const { data: run } = await github.rest.actions.getWorkflowRun({
-              owner,
-              repo,
-              run_id: triggeredRunId
-              });
-
-              if (run.status === 'completed') {
-              workflowCompleted = true;
-              conclusion = run.conclusion;
-              console.log(`Eden workflow completed with conclusion: ${conclusion}`);
-              } else {
-              console.log(`Eden workflow status: ${run.status}, waiting...`);
-              await new Promise(resolve => setTimeout(resolve, pollInterval));
-              }
-            }
-
-            if (!workflowCompleted) {
-              core.setFailed('Eden workflow did not complete within the timeout period');
-            } else if (conclusion !== 'success') {
-              core.setFailed(`Eden workflow completed with conclusion: ${conclusion}`);
-            }
-
-            core.setOutput('eden_conclusion', conclusion);
+          echo "Eden tests result: $result"
+          if [[ "$result" != "success" ]]; then
+            echo "::error::Eden tests failed with result: $result"
+            exit 1
+          fi
 
   finalize:
     name: Finalize Eden Runner status
