@@ -28,6 +28,7 @@ jobs:
       pr_id: ${{ steps.extract.outputs.pr_id }}
       original_run_id: ${{ steps.extract.outputs.original_run_id }}
       pr_sha: ${{ steps.extract.outputs.pr_sha }}
+      pr_base_ref: ${{ steps.extract.outputs.pr_base_ref }}
       hv: ${{ steps.extract.outputs.hv }}
       arch: ${{ steps.extract.outputs.arch }}
       platform: ${{ steps.extract.outputs.platform }}
@@ -64,7 +65,7 @@ jobs:
         if: ${{ steps.check_gate.outputs.skip_run == 'false' }}
         env:
           RUN_CONTEXT_FILE: ${{ env.RUN_CONTEXT_FILE }}
-          REQUIRED_FIELDS: pr_id, original_run_id, pr_sha, hv, arch, platform, gate_run_id, gate_status_name
+          REQUIRED_FIELDS: pr_id, original_run_id, pr_sha, pr_base_ref, hv, arch, platform, gate_run_id, gate_status_name
         run: |
           if [[ ! -f "$RUN_CONTEXT_FILE" ]]; then
             echo "$RUN_CONTEXT_FILE file not found"
@@ -95,7 +96,7 @@ jobs:
         if: ${{ steps.check_gate.outputs.skip_run == 'false' }}
         id: extract
         env:
-          FIELDS: pr_id, original_run_id, pr_sha, hv, arch, platform, gate_run_id, gate_status_name
+          FIELDS: pr_id, original_run_id, pr_sha, pr_base_ref, hv, arch, platform, gate_run_id, gate_status_name
         run: |
           # Extract fields from the JSON file
           for field in $(echo "$FIELDS" | tr ',' ' '); do
@@ -175,10 +176,56 @@ jobs:
             }
 
 
-  tests:
-    name: ${{ needs.context.outputs.eden_parent_job_title }}
+  select_eden_version:
+    name: Select Eden Version
+    runs-on: ubuntu-latest
     needs: context
     if: needs.context.outputs.skip_run == 'false'
+    outputs:
+      eden_version: ${{ steps.select.outputs.eden_version }}
+    steps:
+      - name: Select Eden version based on target branch
+        id: select
+        env:
+          BASE_REF: ${{ needs.context.outputs.pr_base_ref }}
+        run: |
+          echo "PR target branch: $BASE_REF"
+
+          # Map EVE branches to Eden versions
+          # LTS branches (13.4-stable, 14.5-stable) use Eden 1.0.9
+          # All other branches use Eden 1.0.13
+          case "$BASE_REF" in
+            "13.4-stable"|"14.5-stable")
+              eden_version="1.0.9"
+              echo "LTS branch detected, using Eden $eden_version"
+              ;;
+            *)
+              eden_version="1.0.13"
+              echo "Using default Eden $eden_version for branch '$BASE_REF'"
+              ;;
+          esac
+
+          echo "Selected Eden version: $eden_version"
+          echo "eden_version=$eden_version" >> "$GITHUB_OUTPUT"
+
+
+  tests-eden-1_0_9:
+    name: ${{ needs.context.outputs.eden_parent_job_title }}
+    needs: [context, select_eden_version]
+    if: needs.context.outputs.skip_run == 'false' && needs.select_eden_version.outputs.eden_version == '1.0.9'
+    uses: lf-edge/eden/.github/workflows/test.yml@1.0.9
+    secrets: inherit
+    with:
+      eve_image: "evebuild/pr:${{ needs.context.outputs.pr_id }}"
+      eve_log_level: "debug"
+      eve_artifact_name: "eve-${{ needs.context.outputs.hv }}-${{ needs.context.outputs.arch }}-${{ needs.context.outputs.platform }}"
+      artifact_run_id: ${{ needs.context.outputs.original_run_id }}
+      eden_version: "1.0.9"
+
+  tests-eden-1_0_13:
+    name: ${{ needs.context.outputs.eden_parent_job_title }}
+    needs: [context, select_eden_version]
+    if: needs.context.outputs.skip_run == 'false' && needs.select_eden_version.outputs.eden_version == '1.0.13'
     uses: lf-edge/eden/.github/workflows/test.yml@1.0.13
     secrets: inherit
     with:
@@ -187,6 +234,31 @@ jobs:
       eve_artifact_name: "eve-${{ needs.context.outputs.hv }}-${{ needs.context.outputs.arch }}-${{ needs.context.outputs.platform }}"
       artifact_run_id: ${{ needs.context.outputs.original_run_id }}
       eden_version: "1.0.13"
+
+  # Aggregate job to represent the test results
+  tests:
+    name: Eden Tests Complete
+    needs: [context, select_eden_version, tests-eden-1_0_9, tests-eden-1_0_13]
+    if: always() && needs.context.outputs.skip_run == 'false'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check test results
+        run: |
+          # Determine which job ran based on the selected version
+          if [[ "${{ needs.select_eden_version.outputs.eden_version }}" == "1.0.9" ]]; then
+            result="${{ needs.tests-eden-1_0_9.result }}"
+          elif [[ "${{ needs.select_eden_version.outputs.eden_version }}" == "1.0.13" ]]; then
+            result="${{ needs.tests-eden-1_0_13.result }}"
+          else
+            echo "::error::Unknown Eden version: ${{ needs.select_eden_version.outputs.eden_version }}"
+            exit 1
+          fi
+
+          echo "Eden tests result: $result"
+          if [[ "$result" != "success" ]]; then
+            echo "::error::Eden tests failed with result: $result"
+            exit 1
+          fi
 
   finalize:
     name: Finalize Eden Runner status
