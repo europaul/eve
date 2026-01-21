@@ -1,4 +1,4 @@
-// Copyright (c) 2018 Zededa, Inc.
+// Copyright (c) 2018-2026 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
 package types
@@ -164,8 +164,6 @@ const (
 	MetricInterval GlobalSettingKey = "timer.metric.interval"
 	// HardwareHealthInterval global setting key
 	HardwareHealthInterval GlobalSettingKey = "timer.hardwarehealth.interval"
-	// HardwareInfoInterval global setting key
-	HardwareInfoInterval GlobalSettingKey = "timer.hardwareinfo.interval"
 	// DevInfoInterval global setting key
 	DevInfoInterval GlobalSettingKey = "timer.deviceinfo.interval"
 	// DiskScanMetricInterval global setting key
@@ -336,6 +334,9 @@ const (
 	KernelRemoteLogLevel GlobalSettingKey = "debug.kernel.remote.loglevel"
 	// FmlCustomResolution global setting key
 	FmlCustomResolution GlobalSettingKey = "app.fml.resolution"
+	// AppBootOrder global setting key for device-wide default boot order for VMs
+	// Supported values: "" (default), "usb" (prioritize USB), "nousb" (deprioritize USB)
+	AppBootOrder GlobalSettingKey = "app.boot.order"
 	// EdgeviewPublicKeys global setting key
 	EdgeviewPublicKeys GlobalSettingKey = "edgeview.authen.publickey"
 
@@ -427,6 +428,12 @@ const (
 	// EnableTCPMSSClamping : Configuration property to enable or disable TCP MSS clamping
 	// for application traffic forwarded by EVE.
 	EnableTCPMSSClamping GlobalSettingKey = "app.enable.tcp.mss.clamping"
+
+	// K3s Config Overrides: To properly override existing config settings, the following rules must be followed:
+	// - config merge: https://docs.k3s.io/installation/configuration#value-merge-behavior
+	// - server config spec: https://docs.k3s.io/cli/server
+	// - agent config spec: https://docs.k3s.io/cli/agent
+	K3sConfigOverride GlobalSettingKey = "k3s.config.override"
 )
 
 // AgentSettingKey - keys for per-agent settings
@@ -993,7 +1000,6 @@ func NewConfigItemSpecMap() ConfigItemSpecMap {
 	// timer.metric.hardwarehealth.interval (seconds)
 	// Default value 12 hours minimum value 6 hours.
 	configItemSpecMap.AddIntItem(HardwareHealthInterval, 12*HourInSec, 6*HourInSec, 0xFFFFFFFF)
-	configItemSpecMap.AddIntItem(HardwareInfoInterval, 3*HourInSec, 3*HourInSec, 0xFFFFFFFF)
 	// timer.deviceinfo.interval (seconds)
 	// Forces the device to send device info to the controller at least once in a while.
 	// Default value 10 minutes, minimum value 30 seconds
@@ -1100,6 +1106,7 @@ func NewConfigItemSpecMap() ConfigItemSpecMap {
 	configItemSpecMap.AddStringItem(SyslogRemoteLogLevel, "info", validateSyslogKernelLevel)
 	configItemSpecMap.AddStringItem(KernelRemoteLogLevel, "info", validateSyslogKernelLevel)
 	configItemSpecMap.AddStringItem(FmlCustomResolution, FmlResolutionUnset, blankValidator)
+	configItemSpecMap.AddStringItem(AppBootOrder, "", validateBootOrder)
 	configItemSpecMap.AddStringItem(TUIMonitorLogLevel, "info", blankValidator)
 	configItemSpecMap.AddStringItem(EdgeviewPublicKeys, "", blankValidator)
 
@@ -1135,6 +1142,9 @@ func NewConfigItemSpecMap() ConfigItemSpecMap {
 
 	// TCP MSS Clamping
 	configItemSpecMap.AddBoolItem(EnableTCPMSSClamping, true)
+
+	//K3s Settings
+	configItemSpecMap.AddStringItem(K3sConfigOverride, "", base64Validator)
 	return configItemSpecMap
 }
 
@@ -1146,6 +1156,16 @@ func validateLogLevel(level string) error {
 	default:
 		_, err := logrus.ParseLevel(level)
 		return err
+	}
+}
+
+// validateBootOrder - make sure the boot order has one of the supported values
+func validateBootOrder(bootOrder string) error {
+	switch bootOrder {
+	case "", "usb", "nousb":
+		return nil
+	default:
+		return fmt.Errorf("validateBootOrder: invalid boot order '%s', must be '', 'usb', or 'nousb'", bootOrder)
 	}
 }
 

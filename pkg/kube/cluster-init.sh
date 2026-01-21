@@ -12,8 +12,6 @@ HOSTNAME=""
 VMICONFIG_FILENAME="/run/zedkube/vmiVNC.run"
 VNC_RUNNING=false
 ClusterPrefixMask=""
-config_file="/etc/rancher/k3s/config.yaml"
-k3s_config_file="/etc/rancher/k3s/k3s-config.yaml"
 clusterStatusPort="12346"
 INITIAL_WAIT_TIME=5
 MAX_WAIT_TIME=$((10 * 60)) # 10 minutes in seconds, exponential backoff for k3s restart
@@ -30,8 +28,12 @@ KUBE_ROOT_EXT4="/persist/vault/kube"
 KUBE_ROOT_ZFS="/dev/zvol/persist/etcd-storage"
 KUBE_ROOT_MOUNTPOINT="/var/lib"
 
+# shellcheck source=pkg/kube/lib/config.sh
+. /usr/bin/config.sh
 # shellcheck source=pkg/kube/pubsub.sh
 . /usr/bin/pubsub.sh
+# shellcheck source=pkg/kube/lib/config.sh
+. /usr/bin/kube/config.sh
 # shellcheck source=pkg/kube/descheduler-utils.sh
 . /usr/bin/descheduler-utils.sh
 # shellcheck source=pkg/kube/longhorn-utils.sh
@@ -191,16 +193,18 @@ setup_prereqs () {
         mkdir -p /run/lock
         rm -rf /var/log
         ln -s "$K3S_LOG_DIR" /var/log
+        mkdir -p "$K3S_CONFIG_DIR"
         /usr/sbin/iscsid start
         mount --make-rshared /
         setup_cgroup
         #Check network and default routes are up
         wait_for_default_route
-        check_network_connection
         wait_for_device_name
         chmod o+rw /dev/null
         wait_for_vault
         mount_kube_root
+        # We need /var/lib to be mounted before we go for network connection check.
+        check_network_connection
 }
 
 config_cluster_roles() {
@@ -276,7 +280,7 @@ check_start_k3s() {
         # for now, always copy to get the latest
 
         # start the k3s server now
-        nohup /usr/bin/k3s server --config "$k3s_config_file" &
+        nohup /usr/bin/k3s server &
 
         k3s_pid=$!
         # Give the embedded etcd in k3s priority over io as its fsync latencies are critical
@@ -647,9 +651,9 @@ check_cluster_config_change() {
       if [ ! -f /var/lib/edge-node-cluster-mode ]; then
         return 0
       else
-        # check to see if the persistent config file exists, if yes, then we need to
+        # check to see if the persistent config exists, if yes, then we need to
         # wait until zedkube to publish the ENC status file
-        if [ -f "${ENCC_FILE_PATH}" ]; then
+        if Config_cluster_exists; then
           logmsg "EdgeNodeClusterConfig file found, but the EdgeNodeClusterStatus file is missing, wait..."
           return 0
         fi
@@ -671,7 +675,9 @@ check_cluster_config_change() {
             # mark it cluster mode before changing the config file
             touch /var/lib/edge-node-cluster-mode
 
-            if Registration_ConfigExists; then
+            Config_cluster_type_get
+            cluster_type=$?
+            if [ $cluster_type -eq $CLUSTER_TYPE_K3S_BASE ]; then
                 # Hold on, don't apply yet, complete conversion to base mode first
                 if [ ! -f /var/lib/base-k3s-mode ]; then
                         uninstall_components
@@ -752,8 +758,16 @@ check_cluster_config_change() {
     fi
     logmsg "Check cluster config change done"
 
-    ## A conversion to base-k3s mode should be complete here, now complete registration
-    if [ -e /var/lib/base-k3s-mode ]; then
+    # Registration can exist in multiple types, if in base mode, wait for uninstall
+    Config_cluster_type_get
+    cluster_type=$?
+    if [ $cluster_type -eq $CLUSTER_TYPE_K3S_BASE ]; then
+        # Hold on, don't apply yet, complete conversion to base mode first
+        if [ -e /var/lib/base-k3s-mode ]; then
+                Registration_CheckApply
+        fi
+    else
+        # if replicated storage mode, apply immediately
         Registration_CheckApply
     fi
 }
@@ -884,7 +898,6 @@ tls-san:
   - "${join_serverIP}"
 flannel-iface: "${cluster_intf}"
 node-ip: "${cluster_node_ip}"
-node-name: "${HOSTNAME}"
 EOF
       )
 serverContent=$(cat <<- EOF
@@ -892,7 +905,6 @@ server: "https://${join_serverIP}:6443"
 token: "${cluster_token}"
 flannel-iface: "${cluster_intf}"
 node-ip: "${cluster_node_ip}"
-node-name: "${HOSTNAME}"
 EOF
       )
 
@@ -903,22 +915,18 @@ EOF
     if [ "$is_bootstrap" = "true" ]; then
         #Bootstrap_Node=true
         if [ "$1" = "true" ]; then
-                cp "$config_file" "$k3s_config_file"
-                echo "$bootstrapContent" >> "$k3s_config_file"
+                echo "$bootstrapContent" >> "$K3S_CLUSTER_CONFIG_FILE"
                 logmsg "bootstrap config.yaml configured with $join_serverIP and $HOSTNAME"
         else # if we are in restart case, and we are the bootstrap node, wait for some other nodes to join
                 # we go here, means we can not find node to join the cluster, we have waited long enough
                 # but still put in the server config.yaml for now
                 logmsg "join the cluster, use server content config.yaml"
-                cp "$config_file" "$k3s_config_file"
-                #echo "$bootstrapContent" >> "$k3s_config_file"
-                echo "$serverContent" >> "$k3s_config_file"
+                echo "$serverContent" >> "$K3S_CLUSTER_CONFIG_FILE"
         fi
     else
       # non-bootstrap node, decide if we need to wait for the join server to be ready
       #Bootstrap_Node=false
-      cp "$config_file" "$k3s_config_file"
-      echo "$serverContent" >> "$k3s_config_file"
+      echo "$serverContent" >> "$K3S_CLUSTER_CONFIG_FILE"
       logmsg "config.yaml configured with Join-ServerIP $join_serverIP and hostname $HOSTNAME"
       if [ "$1" = true ]; then
         logmsg "Check if the Endpoint https://$join_serverIP:6443 is in cluster mode, and wait if not..."
@@ -997,6 +1005,9 @@ setup_prereqs
 
 wait_for_item "k3s-install"
 Update_CheckNodeComponents
+Config_k3s_override_apply || {
+        logmsg "k3s user override config sync:$? at boot time"
+}
 
 if [ -f /var/lib/convert-to-single-node ]; then
         logmsg "remove /var/lib and copy saved single node /var/lib"
@@ -1035,9 +1046,6 @@ if [ ! -f /var/lib/all_components_initialized ]; then
     provision_cluster_config_file true
   else
     logmsg "Single node mode prepare config.yaml for $HOSTNAME"
-
-    # append the hostname to the config.yaml and bootstrap-config.yaml
-    cp "$config_file" "$k3s_config_file"
   fi
 
   # assign node-ip to multus
@@ -1064,10 +1072,9 @@ else # a restart case, found all_components_initialized
     logmsg "provision config.yaml done"
   else # single node mode
     logmsg "Single node mode, prepare config.yaml for $HOSTNAME"
-    cp "$config_file" "$k3s_config_file"
-    # append the hostname to the config.yaml
-    if ! grep -q node-name "$k3s_config_file"; then
-      echo "node-name: $HOSTNAME" >> "$k3s_config_file"
+    # append the hostname to the config.yamls
+    if ! grep -q node-name "$K3S_NODENAME_CONFIG_FILE"; then
+      echo "node-name: $HOSTNAME" > "$K3S_NODENAME_CONFIG_FILE"
     fi
   fi
 fi
@@ -1281,12 +1288,26 @@ else
                         # Handle new manifests after eve baseos update
                         #
                         if [ -e "${KUBE_MANIFESTS_DIR}/" ]; then
-                                if ! Registration_Applied; then
+                                Config_cluster_type_get
+                                cluster_type=$?
+                                if [ $cluster_type -eq $CLUSTER_TYPE_UNSPECIFIED ]; then
+                                        if ! Registration_Applied; then
+                                                # Replicated Storage wants extra storage classes
+                                                if [ ! -e "${KUBE_MANIFESTS_DIR}/storage-classes.yaml" ]; then
+                                                        cp /etc/k3s-manifests/storage-classes.yaml "${KUBE_MANIFESTS_DIR}/storage-classes.yaml"
+                                                fi
+                                        else
+                                                # Base Mode does not want extra pre-installed storage classes
+                                                cleanup_storageclasses
+                                        fi
+                                fi
+                                if [ $cluster_type -eq $CLUSTER_TYPE_REPLICATED_STORAGE ]; then
                                         # Replicated Storage wants extra storage classes
                                         if [ ! -e "${KUBE_MANIFESTS_DIR}/storage-classes.yaml" ]; then
                                                 cp /etc/k3s-manifests/storage-classes.yaml "${KUBE_MANIFESTS_DIR}/storage-classes.yaml"
                                         fi
-                                else
+                                fi
+                                if [ $cluster_type -eq $CLUSTER_TYPE_K3S_BASE ]; then
                                         # Base Mode does not want extra pre-installed storage classes
                                         cleanup_storageclasses
                                 fi
@@ -1296,6 +1317,11 @@ else
                         longhorn_post_install_config
                         touch /var/lib/longhorn_configured
                 fi
+
+                Config_k3s_override_apply || {
+                        logmsg "k3s user override config sync:$?, starting k3s terminate"
+                        terminate_k3s
+                }
         fi
 fi
         check_log_file_size "k3s.log"

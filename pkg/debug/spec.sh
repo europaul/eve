@@ -189,7 +189,7 @@ LSPCI_D=$(lspci -D)
 cat <<__EOT__
 {
   "arch": $ARCH,
-  "productURL": "$(cat /persist/status/hardwaremodel || cat /config/hardwaremodel)",
+  "productURL": "$(cat /persist/status/hardwaremodel 2> /dev/null || cat /config/hardwaremodel 2> /dev/null || echo 'not found' )",
   "productStatus": "production",
   "attr": {
     "memory": "${MEM}M",
@@ -383,6 +383,7 @@ print_usb_devices() {
         fi
 
         cat <<__EOT__
+    ${COMMA}
     {
       "ztype": "${ztype}",
       "phylabel": "${label}",
@@ -395,8 +396,8 @@ print_usb_devices() {
       },
       "logicallabel": "$label",
       "usagePolicy": {}
-    },
 __EOT__
+    COMMA="},"
     done
 }
 

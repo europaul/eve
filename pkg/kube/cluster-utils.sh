@@ -3,6 +3,9 @@
 # Copyright (c) 2024 Zededa, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
+# shellcheck source=pkg/kube/lib/config.sh
+. /usr/bin/config.sh
+
 LOG_SIZE=$((5*1024*1024))
 K3s_LOG_FILE="k3s.log"
 SAVE_KUBE_VAR_LIB_DIR="/persist/kube-save-var-lib"
@@ -20,6 +23,13 @@ logmsg() {
 }
 
 check_network_connection () {
+        # Address the case where device is installed and moved to a location with no internet access"
+        # If we already installed all the components, no internet access is not an issue.
+        if [ -f /var/lib/all_components_initialized ]; then
+           logmsg "All components already initialized, ignoring network connection check"
+           return
+        fi
+
         while true; do
                 ret=$(curl -o /dev/null -w "%{http_code}" -s "https://get.k3s.io")
                 if [ "$ret" -eq 200 ]; then
@@ -313,8 +323,8 @@ wait_for_device_name() {
                 fi
         done
 
-        if ! grep -q node-name /etc/rancher/k3s/config.yaml; then
-                echo "node-name: $HOSTNAME" >> /etc/rancher/k3s/config.yaml
+        if [ ! -f "$K3S_NODENAME_CONFIG_FILE" ]; then
+                echo "node-name: $HOSTNAME" > "$K3S_NODENAME_CONFIG_FILE"
         fi
         logmsg "Hostname: $HOSTNAME"
 }

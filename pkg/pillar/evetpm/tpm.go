@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/gob"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"io"
@@ -229,32 +230,6 @@ var (
 			tpm2.FlagUserWithAuth,
 		ECCParameters: &tpm2.ECCParams{
 			CurveID: tpm2.CurveNISTP256,
-		},
-	}
-	// NullKeyTemplate is used for detecting TPM reset attacks
-	NullKeyTemplate = tpm2.Public{
-		Type:    tpm2.AlgECC,    // TPM_ALG_ECC
-		NameAlg: tpm2.AlgSHA256, // TPM_ALG_SHA256
-		Attributes: tpm2.FlagFixedTPM | tpm2.FlagFixedParent | tpm2.FlagSensitiveDataOrigin |
-			tpm2.FlagUserWithAuth | tpm2.FlagNoDA | tpm2.FlagRestricted | tpm2.FlagDecrypt, // TPM2_OA_NULL_KEY
-		AuthPolicy: []byte{}, // Empty auth policy
-		ECCParameters: &tpm2.ECCParams{
-			Symmetric: &tpm2.SymScheme{
-				Alg:     tpm2.AlgAES, // TPM_ALG_AES
-				KeyBits: 128,         // AES_KEY_BITS (128)
-				Mode:    tpm2.AlgCFB, // TPM_ALG_CFB
-			},
-			Sign: &tpm2.SigScheme{
-				Alg: tpm2.AlgNull, // TPM_ALG_NULL
-			},
-			CurveID: tpm2.CurveNISTP256, // TPM2_ECC_NIST_P256
-			KDF: &tpm2.KDFScheme{
-				Alg: tpm2.AlgNull, // TPM_ALG_NULL
-			},
-			Point: tpm2.ECPoint{
-				XRaw: []byte{}, // Zero size X point
-				YRaw: []byte{}, // Zero size Y point
-			},
 		},
 	}
 )
@@ -545,15 +520,6 @@ var vendorRegistry = map[uint32]string{
 	0x474F4F47: "Google",
 }
 
-// till we have next version of go-tpm released, use this
-const (
-	tpmPropertyManufacturer tpm2.TPMProp = 0x105
-	tpmPropertyVendorStr1   tpm2.TPMProp = 0x106
-	tpmPropertyVendorStr2   tpm2.TPMProp = 0x107
-	tpmPropertyFirmVer1     tpm2.TPMProp = 0x10b
-	tpmPropertyFirmVer2     tpm2.TPMProp = 0x10c
-)
-
 // FetchTpmHwInfo returns TPM Hardware properties in a string
 func FetchTpmHwInfo() (string, error) {
 	//If we had done this earlier, return the last result
@@ -569,23 +535,23 @@ func FetchTpmHwInfo() (string, error) {
 	}
 
 	//First time. Fetch it from TPM and cache it.
-	v1, err := GetTpmProperty(tpmPropertyManufacturer)
+	v1, err := GetTpmProperty(tpm2.Manufacturer)
 	if err != nil {
 		return "", err
 	}
-	v2, err := GetTpmProperty(tpmPropertyVendorStr1)
+	v2, err := GetTpmProperty(tpm2.VendorString1)
 	if err != nil {
 		return "", err
 	}
-	v3, err := GetTpmProperty(tpmPropertyVendorStr2)
+	v3, err := GetTpmProperty(tpm2.VendorString2)
 	if err != nil {
 		return "", err
 	}
-	v4, err := GetTpmProperty(tpmPropertyFirmVer1)
+	v4, err := GetTpmProperty(tpm2.FirmwareVersion1)
 	if err != nil {
 		return "", err
 	}
-	v5, err := GetTpmProperty(tpmPropertyFirmVer2)
+	v5, err := GetTpmProperty(tpm2.FirmwareVersion2)
 	if err != nil {
 		return "", err
 	}
@@ -594,6 +560,20 @@ func FetchTpmHwInfo() (string, error) {
 		GetFirmwareVersion(v4, v5))
 
 	return tpmHwInfo, nil
+}
+
+// GetSpecVersion returns TPM specification version string
+func GetSpecVersion() (string, error) {
+	value, err := GetTpmProperty(tpm2.FamilyIndicator)
+	if err != nil {
+		return "", err
+	}
+	hx, err := hex.DecodeString(fmt.Sprintf("%08x", value))
+	if err != nil {
+		return "", err
+	}
+	specVersion := bytes.Trim(hx, "\x00")
+	return string(specVersion), nil
 }
 
 // FetchVaultKey retrieves TPM part of the vault key
@@ -772,11 +752,6 @@ func FetchSealedVaultKey(log *base.LogObject) ([]byte, error) {
 
 // SealDiskKey seals key into TPM2.0, with provided PCRs
 func SealDiskKey(log *base.LogObject, key []byte, pcrSel tpm2.PCRSelection) error {
-	// First make sure TPM is somewhat trustworthy
-	if err := ValidateKernelNullPrimary(log); err != nil {
-		return fmt.Errorf("failed to verify null primary, possibly due to a tpm reset attack: %v", err)
-	}
-
 	rw, err := tpm2.OpenTPM(TpmDevicePath)
 	if err != nil {
 		return err
@@ -904,11 +879,6 @@ func isLegacyKeyPresent() bool {
 
 // UnsealDiskKey unseals key from TPM2.0
 func UnsealDiskKey(pcrSel tpm2.PCRSelection) ([]byte, error) {
-	// First make sure TPM is somewhat trustworthy
-	if err := ValidateKernelNullPrimary(nil); err != nil {
-		return nil, fmt.Errorf("failed to verify null primary, possibly due to a tpm reset attack: %v", err)
-	}
-
 	rw, err := tpm2.OpenTPM(TpmDevicePath)
 	if err != nil {
 		return nil, err

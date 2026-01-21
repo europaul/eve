@@ -3,12 +3,13 @@
 | Name | Type | Default | Min Value | Max Value | Description |
 | ---- | ---- | ------- | --------- | --------- | ----------- |
 | app.allow.vnc | boolean | false (only local access) | - | - | allow access to EVE's VNC ports from external IPs |
+| app.boot.order | string | "" | - | - | Set device-wide default boot order for VMs. Supported values: "" (default UEFI behavior), "usb" (prioritize USB devices), "nousb" (remove USB devices from boot order). Can be overridden per-VM via Controller API (VmConfig.boot_order) or LPS (/api/v1/appbootinfo). See [VM-BOOT-ORDER.md](VM-BOOT-ORDER.md) for details. |
 | app.fml.resolution | string | notset | - | - | Set system-wide value of forced resolution for applications running in FML mode, it can be one of [predefined](/pkg/pillar/types/global.go) FmlResolution* values. |
 | timer.config.interval | integer in seconds | 60 (1 minute) | 5 | 86400 (1 day) | how frequently device gets config (needs a reboot to take effect) |
 | timer.cert.interval | integer in seconds | 86400 (1 day) | 60 (1 minute) | 4294967295 (max uint32) | how frequently device checks for new controller certificates |
 | timer.metric.interval | integer in seconds | 60 (1 minute) | 5 | 3600 (1 hour) | how frequently device reports metrics |
-| timer.hardwarehealth.interval | integer in seconds | 43200 (12 hours) | 21600 (6 hours) | 4294967295 (max uint32) | how frequently device reports hardware health information (ECC) to controller |
-| timer.hardwareinfo.interval | integer in seconds | 10800 (3 hours) | 10800 (3 hours) | 4294967295 (max uint32) | how frequently device reports hardware information (SMART) to controller |
+| timer.hardwarehealth.interval | integer in seconds | 43200 (12 hours) | 21600 (6 hours) | 4294967295 (max uint32) | how frequently device reports hardware health information (ECC, SMART) to controller |
+| timer.hardwareinfo.interval | integer in seconds | 10800 (3 hours) | 10800 (3 hours) | 4294967295 (max uint32) | how frequently device reports hardware information (SMART) to controller (deprecated) |
 | timer.deviceinfo.interval | integer in seconds | 600 (10 minutes) | 30 | 4294967295 (max uint32) | how frequently device is forced to report device info to controller even though nothing changed (needs a reboot to take effect) |
 | timer.metric.diskscan.interval | integer in seconds | 300 (5 minutes) | 5 | 3600 (1 hour) | how frequently device should scan the disk for metrics |
 | timer.location.cloud.interval | integer in seconds | 3600 (1 hour) | 300 (5 minutes) | 4294967295 (max uint32) | how frequently device reports geographic location information to controller |

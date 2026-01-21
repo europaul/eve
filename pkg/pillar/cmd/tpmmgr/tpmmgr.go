@@ -314,11 +314,6 @@ func getQuote(nonce []byte) ([]byte, []byte, []types.PCRValue, error) {
 		return nil, nil, nil, fmt.Errorf("invalid nonce length %d", len(nonce))
 	}
 
-	// First make sure TPM is somewhat trustworthy
-	if err := etpm.ValidateKernelNullPrimary(log); err != nil {
-		return nil, nil, nil, fmt.Errorf("failed to verify null primary, possibly due to a tpm reset attack: %v", err)
-	}
-
 	rw, err := tpm2.OpenTPM(etpm.TpmDevicePath)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("unable to open TPM device handle (%v), returning empty quote/PCRs", err)
@@ -1286,7 +1281,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	ps.StillRunning(agentName, warningTime, errorTime)
 
 	// Wait until we have been onboarded aka know our own UUID, but we don't use the UUID
-	err := wait.WaitForOnboarded(ps, log, agentName, warningTime, errorTime)
+	_, err := wait.WaitForOnboarded(ps, log, agentName, warningTime, errorTime)
 	if err != nil {
 		log.Fatal(err)
 	}

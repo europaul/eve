@@ -320,7 +320,10 @@ QEMU_OPTS_COMMON= -m $(QEMU_MEMORY) -smp 4  $(QEMU_OPTS_BIOS) \
         -netdev user,id=eth0,net=$(IPS_NET1),dhcpstart=$(IPS_NET1_FIRST_IP),hostfwd=tcp::$(SSH_PORT)-:22$(QEMU_TFTP_OPTS) -device virtio-net-pci,netdev=eth0,romfile="" \
 	$(QEMU_OPTS_eth1) \
         -device nec-usb-xhci,id=xhci \
-        -qmp unix:$(CURDIR)/qmp.sock,server,wait=off
+        -qmp unix:$(CURDIR)/qmp.sock,server,wait=off \
+        -object can-bus,id=canbus0 \
+        -device kvaser_pci,canbus=canbus0
+
 QEMU_OPTS_CONF_PART=$(shell [ -d "$(CONF_PART)" ] && echo '-drive file=fat:rw:$(CONF_PART),format=raw')
 QEMU_OPTS=$(QEMU_OPTS_NO_DISPLAY) $(QEMU_OPTS_COMMON) $(QEMU_ACCEL) $(QEMU_OPTS_$(ZARCH)) $(QEMU_OPTS_CONF_PART) $(QEMU_OPTS_TPM)
 QEMU_OPTS_GUI=$(QEMU_OPTS_VGA_DISPLAY_$(ZARCH)) $(QEMU_OPTS_COMMON) $(QEMU_ACCEL) $(QEMU_OPTS_$(ZARCH)) $(QEMU_OPTS_CONF_PART) $(QEMU_OPTS_TPM)
@@ -562,7 +565,7 @@ $(DOCKERFILE_FROM_CHECKER): $(DOCKERFILE_FROM_CHECKER_DIR)/*.go $(DOCKERFILE_FRO
 # this next section checks that the FROM hashes for any image in any dockerfile anywhere here are consistent.
 # For example, one Dockerfile has foo:abc and the next has foo:def, it will flag them.
 # These are the packages that we are ignoring for now
-IGNORE_DOCKERFILE_HASHES_PKGS=alpine installer
+IGNORE_DOCKERFILE_HASHES_PKGS=alpine
 IGNORE_DOCKERFILE_HASHES_EVE_TOOLS=
 
 IGNORE_DOCKERFILE_DOT_GO_DIR=$(shell find .go/ -name Dockerfile -exec echo "-i {}" \;)

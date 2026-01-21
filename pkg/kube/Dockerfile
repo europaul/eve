@@ -20,12 +20,14 @@ RUN GO111MODULE=on go build -v -ldflags "-s -w" -mod=vendor -o /out/usr/bin/upda
 
 FROM scratch
 COPY --from=build /out/ /
+RUN mkdir -p /usr/bin/kube/
 COPY cluster-init.sh /usr/bin/
 COPY cluster-utils.sh /usr/bin/
 COPY cgconfig.conf /etc
 COPY utils.sh /usr/bin/
 COPY pubsub.sh /usr/bin/
 COPY tie-breaker-utils.sh /usr/bin/
+COPY lib/* /usr/bin/
 RUN mkdir -p /etc/k3s-manifests
 COPY manifests/* /etc/k3s-manifests/
 
@@ -42,6 +44,7 @@ COPY debuguser-role-binding.yaml /etc/
 COPY k3s-pod-logs.sh /usr/bin/
 COPY registration-utils.sh /usr/bin/
 COPY all-kube-events.sh /usr/bin/
+COPY lib/* /usr/bin/kube/
 
 # kubevirt yaml files are patched files and will be removed later, look at cluster-init.sh
 COPY multus-daemonset.yaml /etc
