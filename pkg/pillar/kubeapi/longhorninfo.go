@@ -41,6 +41,10 @@ func VolumeDirInternalEntriesMap() map[string]struct{} {
 
 // LonghornVolumeSizeDetails returns the provisionedBytes and allocatedBytes size values for a longhorn volume
 func LonghornVolumeSizeDetails(longhornVolumeName string) (provisionedBytes uint64, allocatedBytes uint64, err error) {
+	if err := ensureKubeRuntime("LonghornVolumeSizeDetails"); err != nil {
+		return 0, 0, err
+	}
+
 	apiExists, err := longhornAPIExists()
 	if err != nil {
 		return 0, 0, err
@@ -498,6 +502,10 @@ func longhornStorageUnschedulable() (bool, string) {
 // will be sent out to the controller as info messages
 func PopulateKSI() (types.KubeStorageInfo, error) {
 	ksi := types.KubeStorageInfo{}
+	if err := ensureKubeRuntime("PopulateKSI"); err != nil {
+		return ksi, err
+	}
+
 	apiExists, err := longhornAPIExists()
 	if err != nil {
 		return ksi, err
@@ -578,6 +586,10 @@ func lhVolHasHealthyReplicaWithoutNode(log *base.LogObject, repList *lhv1beta2.R
 
 // LonghornReplicaList returns the replica for a given longhorn volume which is hosted on a given kubernetes node
 func LonghornReplicaList(ownerNodeName string, longhornVolName string) (*lhv1beta2.ReplicaList, error) {
+	if err := ensureKubeRuntime("LonghornReplicaList"); err != nil {
+		return &lhv1beta2.ReplicaList{}, err
+	}
+
 	apiExists, err := longhornAPIExists()
 	if err != nil {
 		return &lhv1beta2.ReplicaList{}, err

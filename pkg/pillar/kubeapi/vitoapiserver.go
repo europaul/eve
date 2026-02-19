@@ -56,6 +56,10 @@ func pvcRequestSize(size uint64) uint64 {
 
 // CreatePVC : creates a Persistent volume of given name and size.
 func CreatePVC(pvcName string, size uint64, log *base.LogObject, storageClass string) error {
+	if err := ensureKubeRuntime("CreatePVC"); err != nil {
+		return err
+	}
+
 	// Get the Kubernetes clientset
 	clientset, err := GetClientSet()
 	if err != nil {
@@ -197,6 +201,10 @@ func checkLonghornSchedulable(nodeName string) error {
 
 // DeletePVC : deletes PVC of the given name.
 func DeletePVC(pvcName string, log *base.LogObject) error {
+	if err := ensureKubeRuntime("DeletePVC"); err != nil {
+		return err
+	}
+
 	// Fault injection: while the marker file exists, fail the PVC delete to
 	// simulate a k8s-API-level delete failure. See DeletePVCFaultPath.
 	if DeletePVCFaultInjected() {
@@ -223,6 +231,10 @@ func DeletePVC(pvcName string, log *base.LogObject) error {
 
 // GetPVCList : Get the list of all PVCs.
 func GetPVCList(log *base.LogObject) ([]string, error) {
+	if err := ensureKubeRuntime("GetPVCList"); err != nil {
+		return nil, err
+	}
+
 	// Get the Kubernetes clientset
 	clientset, err := GetClientSet()
 	if err != nil {
@@ -248,6 +260,10 @@ func GetPVCList(log *base.LogObject) ([]string, error) {
 // FindPVC : Returns true if the PVC exists, else false and not found error is returned to callers.
 // Callers are expected to process the not found error
 func FindPVC(pvcName string, log *base.LogObject) (bool, error) {
+	if err := ensureKubeRuntime("FindPVC"); err != nil {
+		return false, err
+	}
+
 	// Get the Kubernetes clientset
 	clientset, err := GetClientSet()
 	if err != nil {
@@ -265,6 +281,10 @@ func FindPVC(pvcName string, log *base.LogObject) (bool, error) {
 
 // GetPVCInfo : Returns the PVC info in the ImgInfo format.
 func GetPVCInfo(pvcName string, log *base.LogObject) (*types.ImgInfo, error) {
+	if err := ensureKubeRuntime("GetPVCInfo"); err != nil {
+		return nil, err
+	}
+
 	// Get the Kubernetes clientset
 	clientset, err := GetClientSet()
 	if err != nil {
@@ -334,6 +354,9 @@ func convertBytesToSize(b uint64) string {
 // NewPVCDefinition : returns a default PVC object
 func NewPVCDefinition(pvcName string, size string, annotations,
 	labels map[string]string, storageClass string) *corev1.PersistentVolumeClaim {
+	if ensureKubeRuntime("NewPVCDefinition") != nil {
+		return nil
+	}
 
 	var (
 		// Filesystem is default so no need to declare
@@ -366,6 +389,9 @@ func NewPVCDefinition(pvcName string, size string, annotations,
 // bump a watchdog as the volumecreate worker does not have one.
 func RolloutDiskToPVC(ctx context.Context, log *base.LogObject, exists bool,
 	diskfile string, pvcName string, filemode bool, pvcSize uint64, storageClass string) error {
+	if err := ensureKubeRuntime("RolloutDiskToPVC"); err != nil {
+		return err
+	}
 
 	// Get the Kubernetes clientset
 	clientset, err := GetClientSet()
@@ -592,6 +618,10 @@ func RolloutDiskToPVC(ctx context.Context, log *base.LogObject, exists bool,
 
 // GetPVFromPVC : Returns volume name (PV) from the PVC name
 func GetPVFromPVC(pvcName string, log *base.LogObject) (string, error) {
+	if err := ensureKubeRuntime("GetPVFromPVC"); err != nil {
+		return "", err
+	}
+
 	// Get the Kubernetes clientset
 	clientset, err := GetClientSet()
 	if err != nil {
@@ -620,6 +650,10 @@ func GetPVFromPVC(pvcName string, log *base.LogObject) (string, error) {
 // We use that attachment name to delete the attachment during failover.
 // Basically the attachment of previous node needs to be deleted to attach to current node.
 func GetVolumeAttachmentFromPV(volName string, nodeName string, log *base.LogObject) (string, string, error) {
+	if err := ensureKubeRuntime("GetVolumeAttachmentFromPV"); err != nil {
+		return "", "", err
+	}
+
 	// Get the Kubernetes clientset
 	clientset, err := GetClientSet()
 	if err != nil {
@@ -651,6 +685,10 @@ func GetVolumeAttachmentFromPV(volName string, nodeName string, log *base.LogObj
 
 // GetVolumeAttachmentFromHost : Return volume attachments on node
 func GetVolumeAttachmentFromHost(nodeName string, log *base.LogObject) ([]string, error) {
+	if err := ensureKubeRuntime("GetVolumeAttachmentFromHost"); err != nil {
+		return []string{}, err
+	}
+
 	// Get the Kubernetes clientset
 	vaList := []string{}
 
@@ -685,6 +723,10 @@ func GetVolumeAttachmentFromHost(nodeName string, log *base.LogObject) ([]string
 
 // DeleteVolumeAttachment : Delete the volumeattachment of given name
 func DeleteVolumeAttachment(vaName string, log *base.LogObject) error {
+	if err := ensureKubeRuntime("DeleteVolumeAttachment"); err != nil {
+		return err
+	}
+
 	// Get the Kubernetes clientset
 	clientset, err := GetClientSet()
 	if err != nil {
@@ -714,6 +756,10 @@ func DeleteVolumeAttachment(vaName string, log *base.LogObject) error {
 
 // GetVolumeAttachmentAttached : Return true if VA is attached, not just requested
 func GetVolumeAttachmentAttached(volName string, nodeName string, log *base.LogObject) (bool, error) {
+	if err := ensureKubeRuntime("GetVolumeAttachmentAttached"); err != nil {
+		return false, err
+	}
+
 	// Get the Kubernetes clientset
 	clientset, err := GetClientSet()
 	if err != nil {
@@ -752,6 +798,10 @@ func stringPtr(str string) *string {
 
 // PVCGet : returns the kubernetes pvc object matched by name
 func PVCGet(pvcName string, log *base.LogObject) (*corev1.PersistentVolumeClaim, error) {
+	if err := ensureKubeRuntime("PVCGet"); err != nil {
+		return nil, err
+	}
+
 	// Get the Kubernetes clientset
 	clientset, err := GetClientSet()
 	if err != nil {
@@ -769,6 +819,10 @@ func PVCGet(pvcName string, log *base.LogObject) (*corev1.PersistentVolumeClaim,
 
 // PODGet : returns the kubernetes pod object matched by name
 func PODGet(podName string, log *base.LogObject) (*corev1.Pod, error) {
+	if err := ensureKubeRuntime("PODGet"); err != nil {
+		return nil, err
+	}
+
 	clientset, err := GetClientSet()
 	if err != nil {
 		err = fmt.Errorf("failed to get clientset: %v", err)
