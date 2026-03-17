@@ -115,6 +115,8 @@ const (
 	AttestQuoteLogType LogObjectType = "attest_quote"
 	// VaultStatusLogType:
 	VaultStatusLogType LogObjectType = "vault_status"
+	// ExtsloaderStatusLogType:
+	ExtsloaderStatusLogType LogObjectType = "extsloader_status"
 	// CipherBlockStatusLogType:
 	CipherBlockStatusLogType LogObjectType = "cipher_block_status"
 	// CipherContextLogType:
