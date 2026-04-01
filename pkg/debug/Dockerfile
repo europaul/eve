@@ -11,7 +11,7 @@
 FROM lfedge/eve-recovertpm:10c3bc5d35f8557dc9fd12ae4cd78485cd34c215 AS recovertpm
 FROM lfedge/eve-bpftrace:d411336b71859e7f6a21eb2c84c32c5d921e1394 AS bpftrace
 FROM lfedge/eve-alpine:d075dd224fa7a7540817d224cc28d3cd998ad04c AS build
-ENV BUILD_PKGS="abuild curl tar make linux-headers patch g++ git gcc gpg gettext gettext-static ncurses-dev jq autoconf openssl-dev zlib-dev zlib-static gpg-agent"
+ENV BUILD_PKGS="abuild curl tar make linux-headers patch g++ git gcc gpg gettext gettext-static ncurses-dev jq autoconf openssl-dev zlib-dev zlib-static gpg-agent pciutils usbutils lsblk"
 # Feel free to add additional packages here, but be aware that
 # EVE's rootfs image can be no larger than 300Mb (and don't
 # forget to check on all supported architectures: e.g. arm64
