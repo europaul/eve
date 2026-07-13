@@ -1813,7 +1813,7 @@ kernel-tag:
 	@echo $(KERNEL_TAG)
 
 .PRECIOUS: rootfs-% $(ROOTFS)-%.img $(ROOTFS_COMPLETE)
-.PHONY: all clean test test-bpftrace test-all run pkgs help live rootfs config installer installer-split live current bootstrap_rootfs pkgs_rootfs multi_rootfs live-bootstrap live-multirootfs run-bootstrap run-bootstrap-with-pkgs universal_rootfs core_rootfs ext_rootfs split_rootfs live-universal run-universal live-split live-split-k run-split eve-pillar-k cache-images FORCE $(DIST) HOSTARCH image-set cache-export eden eden-cover coverage-merge
+.PHONY: all clean test test-bpftrace test-all run pkgs help live rootfs config installer installer-split live current bootstrap_rootfs pkgs_rootfs multi_rootfs live-bootstrap live-multirootfs run-bootstrap run-bootstrap-with-pkgs universal_rootfs core_rootfs ext_rootfs split_rootfs live-universal run-universal live-split live-split-kvm live-split-k run-split live-split-xen run-split-kvm run-split-k run-split-xen eve-split eve-uni run-installer-split run-installer-image run-target eve-pillar-k cache-images FORCE $(DIST) HOSTARCH image-set cache-export eden eden-cover coverage-merge
 FORCE:
 
 .PHONY: evetest
@@ -1918,6 +1918,10 @@ help:
 	@echo "   installer-iso        builds an ISO installers image (to be installed on bootable media)"
 	@echo "   installer-net        builds a tarball of artifacts to be used for PXE booting"
 	@echo "   installer-split      builds universal split installer (core+ext rootfs, HV set at flash time via ZFlash)"
+	@echo "   split_rootfs         builds core + ext rootfs images (experimental: split rootfs, always HV=uni)"
+	@echo "   eve-split            builds single OCI image bundling core (rootfs) + ext (disk-0) for OTA (alias: eve-uni)"
+	@echo "   live-split           builds universal split live image (GRUB HV-selection menu, 60s timeout -> kvm)"
+	@echo "   live-split-{kvm,k,xen}  builds split live image with eve-hv-type preset in CONFIG (no menu wait)"
 	@echo
 	@echo "Commonly used run targets (note they don't automatically rebuild images they run):"
 	@echo "   run-compose          runs all EVE microservices via docker-compose deployment"
@@ -1927,8 +1931,7 @@ help:
 	@echo "   run-bootstrap        runs live-bootstrap disk image (experimental: minimal critical services)"
 	@echo "   run-bootstrap-with-pkgs  runs live-bootstrap with pkgs.img (extsloader agent auto-loads external services)"
 	@echo "   run-universal        runs universal live image (monolithic, all services in one rootfs)"
-	@echo "   run-split            runs split image: core boots, ext services loaded from ext-imga.img via extsloader"
-	@echo "   live-split-k         builds split image with eve-hv-type=k in CONFIG (for flashing to real device)"
+	@echo "   run-split-{kvm,k,xen}  runs split live image (core boots, ext services loaded from ext-imga.img via extsloader)"
 	@echo "   run-live-parallels   runs a full fledged virtual device on Parallels Desktop"
 	@echo "   run-live-vb          runs a full fledged virtual device on VirtualBox"
 	@echo "   run-rootfs           runs a rootfs.img (limited usefulness e.g. quick test before cloud upload)"
