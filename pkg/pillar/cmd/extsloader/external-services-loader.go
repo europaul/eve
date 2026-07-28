@@ -12,6 +12,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -72,6 +73,17 @@ const (
 	pcrIndexExtension       = 12
 	pcrHandleExtension      = tpmutil.Handle(tpm2.PCRFirst + pcrIndexExtension)
 	extensionMeasurementLog = "/persist/status/extsloader_tpm_event_log"
+)
+
+var (
+	// errNoExtensionExpected - Core ships no roothash, so this is a monolithic
+	// image and there is nothing to load.
+	errNoExtensionExpected = errors.New("Core does not expect an Extension")
+	// errNoContentTree - no BaseOS ContentTree to recover from. Terminal, not
+	// transient: installer-provisioned devices never download a BaseOS, so the
+	// Extension only ever exists as the file that is already missing.
+	errNoContentTree = errors.New(
+		"Extension image missing and no BaseOS ContentTree in CAS to recover it from")
 )
 
 // hvOnlyServices maps service names to the HV flavor they require.
@@ -466,18 +478,21 @@ func tryMountAndStartServices(ctx *externalServicesContext) {
 		// extract the disk-additional blob from containerd CAS.
 		// This handles forward upgrade from monolithic to split rootfs.
 		log.Noticef("Extension image %s not found on disk, attempting CAS self-heal...", imageName)
-		pkgsImgPath = extractExtensionFromCAS(ctx, partName, imageName)
-		if pkgsImgPath != "" {
-			log.Noticef("Extension image recovered from CAS to %s (self-heal)", pkgsImgPath)
+		var err error
+		pkgsImgPath, err = extractExtensionFromCAS(ctx, partName, imageName)
+		if err != nil {
+			// Publish the cause, not just the absence: with the Extension down
+			// there is no sshd to inspect the device with, so ExtsloaderStatus
+			// is the only diagnostic that reaches the controller.
+			if errors.Is(err, errNoContentTree) {
+				log.Errorf("%s cannot be recovered: %v", imageName, err)
+			} else {
+				log.Warnf("%s not loaded: %v; will retry in %s", imageName, err, scanInterval)
+			}
+			publishExtsloaderStatus(ctx, types.ExtsloaderStateFailed, err.Error(), partName, "")
+			return
 		}
-	}
-	if pkgsImgPath == "" {
-		log.Warnf("%s not found on any disk or CAS", imageName)
-		log.Warnf("Searched locations: /persist/%s, /mnt/pkgs-disk/%s, block devices, and containerd CAS", imageName, imageName)
-		log.Warnf("To use external services, ensure %s is available in /persist", imageName)
-		log.Warnf("Will retry in %s...", scanInterval)
-		publishExtsloaderStatus(ctx, types.ExtsloaderStateFailed, "extension image not found", partName, "")
-		return
+		log.Noticef("Extension image recovered from CAS to %s (self-heal)", pkgsImgPath)
 	}
 
 	log.Noticef("✓ Found extension image at %s", pkgsImgPath)
@@ -577,17 +592,17 @@ func extensionImageName(partName string) (string, error) {
 // reference, locate the disk-additional layer in CAS, and extract it.
 // This handles the forward upgrade case where old monolithic code wrote
 // Core but skipped Extension during WriteToPartition.
-func extractExtensionFromCAS(ctx *externalServicesContext, partName, imageName string) string {
+// The error describes why recovery was not possible; the caller publishes it
+// in ExtsloaderStatus.
+func extractExtensionFromCAS(ctx *externalServicesContext, partName, imageName string) (string, error) {
 	targetPath, err := types.ExtensionImagePath(partName)
 	if err != nil {
-		log.Errorf("extractExtensionFromCAS: %v", err)
-		return ""
+		return "", fmt.Errorf("cannot resolve Extension path for partition %s: %w", partName, err)
 	}
 
 	// Only attempt self-heal if Core expects an Extension
 	if _, err := os.Stat(extRootHashHostPath); os.IsNotExist(err) {
-		log.Functionf("extractExtensionFromCAS: no %s, Core does not expect Extension", extRootHashHostPath)
-		return ""
+		return "", errNoExtensionExpected
 	}
 
 	log.Noticef("extractExtensionFromCAS: Extension expected but missing, attempting CAS extraction")
@@ -596,8 +611,7 @@ func extractExtensionFromCAS(ctx *externalServicesContext, partName, imageName s
 	// ContentTreeStatus published by volumemgr via pubsub filesystem.
 	ref := findActiveBaseOSReference(ctx, partName)
 	if ref == "" {
-		log.Warnf("extractExtensionFromCAS: could not find active BaseOS ContentTree reference")
-		return ""
+		return "", errNoContentTree
 	}
 
 	log.Noticef("extractExtensionFromCAS: active BaseOS reference: %s", ref)
@@ -608,8 +622,7 @@ func extractExtensionFromCAS(ctx *externalServicesContext, partName, imageName s
 	// FilesTarget.Disks[0] receives that file.
 	casClient, err := cas.NewCAS("containerd")
 	if err != nil {
-		log.Errorf("extractExtensionFromCAS: failed to create CAS client: %v", err)
-		return ""
+		return "", fmt.Errorf("cannot open CAS: %w", err)
 	}
 	defer casClient.CloseClient()
 
@@ -618,15 +631,13 @@ func extractExtensionFromCAS(ctx *externalServicesContext, partName, imageName s
 
 	resolver, err := casClient.Resolver(ctrdCtx)
 	if err != nil {
-		log.Errorf("extractExtensionFromCAS: failed to get CAS resolver: %v", err)
-		return ""
+		return "", fmt.Errorf("cannot resolve from CAS: %w", err)
 	}
 
 	tmpPath := targetPath + ".tmp"
 	f, err := os.Create(tmpPath)
 	if err != nil {
-		log.Errorf("extractExtensionFromCAS: failed to create %s: %v", tmpPath, err)
-		return ""
+		return "", fmt.Errorf("cannot write %s: %w", tmpPath, err)
 	}
 
 	puller := registry.Puller{Image: ref}
@@ -638,8 +649,7 @@ func extractExtensionFromCAS(ctx *externalServicesContext, partName, imageName s
 
 	if err != nil {
 		os.Remove(tmpPath)
-		log.Errorf("extractExtensionFromCAS: pull failed for %s: %v", ref, err)
-		return ""
+		return "", fmt.Errorf("pull of %s from CAS failed: %w", ref, err)
 	}
 	_ = artifact // Artifact.Disks is populated from layer annotations only; we use config label routing instead
 
@@ -647,18 +657,17 @@ func extractExtensionFromCAS(ctx *externalServicesContext, partName, imageName s
 	fi, err := os.Stat(tmpPath)
 	if err != nil || fi.Size() == 0 {
 		os.Remove(tmpPath)
-		log.Warnf("extractExtensionFromCAS: no additional disk extracted from %s (monolithic image or missing label)", ref)
-		return ""
+		return "", fmt.Errorf("%s carries no Extension disk "+
+			"(monolithic image or missing org.lfedge.eci.artifact.disk-0 label)", ref)
 	}
 
 	if err := os.Rename(tmpPath, targetPath); err != nil {
 		os.Remove(tmpPath)
-		log.Errorf("extractExtensionFromCAS: rename failed: %v", err)
-		return ""
+		return "", fmt.Errorf("cannot install recovered Extension at %s: %w", targetPath, err)
 	}
 
 	log.Noticef("extractExtensionFromCAS: successfully extracted Extension (%d bytes) to %s", fi.Size(), targetPath)
-	return targetPath
+	return targetPath, nil
 }
 
 // findActiveBaseOSReference uses pubsub subscriptions to find the CAS
