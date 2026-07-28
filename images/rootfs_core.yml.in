@@ -2,7 +2,7 @@
 # Contains universal pillar (PILLAR_K_TAG) with only critical services.
 # wwan is kept here in the Core so cellular connectivity does not depend on the
 # Extension being loaded and verified.
-# Non-critical services (kube, vector, debug, wlan, guacd, edgeview,
+# Non-critical services (kube, vector, debug, guacd, edgeview,
 # vtpm, memory-monitor, node-exporter) are in rootfs_ext.yml.in.
 
 kernel:
@@ -10,12 +10,12 @@ kernel:
   # the unified_cgroup_hierarchy forces cgroupsv1, which is required until pillar is ready to support v2
   cmdline: "rootdelay=3 linuxkit.unified_cgroup_hierarchy=0"
 init:
-  - linuxkit/init:b5506cc74a6812dc40982cacfd2f4328f8a4b12a
-  - linuxkit/runc:24bcd37e33b5eb445c4fa85b354061fa98b78f26       # runc v3.3.0
-  - linuxkit/containerd:ba19f64efd3331a8fd0a33e00eabd14f6ee1780e # containerd v2.2.0
+  - linuxkit/init:v1.3.0
+  - linuxkit/runc:v1.3.0       # runc v3.3.0
+  - linuxkit/containerd:v1.3.0 # containerd v2.2.0
   # pillar's logic rely on existence of getty and /etc/init.d/001-getty inside
-  - linuxkit/getty:e74e6cad132403d1a6d6cd25b136a7c69c99f3f7
-  - linuxkit/memlogd:1ded209c4cc10aa8de2099f4156164b59df14e3c
+  - linuxkit/getty:v1.3.0
+  - linuxkit/memlogd:v1.3.0
   - DOM0ZTOOLS_TAG
   - GRUB_TAG
   - FW_TAG
@@ -28,7 +28,7 @@ onboot:
     image: RNGD_TAG
     command: ["/sbin/rngd", "-1"]
   - name: sysctl
-    image: linuxkit/sysctl:c6f23919b8610c7645a89a89f863c6209bc84bee
+    image: linuxkit/sysctl:43ac1d39da329c3567fcb9689e5ca99de6d169b6
     binds:
       - /etc/sysctl.d:/etc/sysctl.d
     capabilities:
@@ -58,6 +58,10 @@ services:
     image: NEWLOGD_TAG
     cgroupsPath: /eve/services/newlogd
     oomScoreAdj: -999
+  - name: wwan
+    image: WWAN_TAG
+    cgroupsPath: /eve/services/wwan
+    oomScoreAdj: -999
   - name: pillar
     image: PILLAR_K_TAG
     cgroupsPath: /eve/services/pillar
@@ -70,23 +74,19 @@ services:
     image: XENTOOLS_TAG
     cgroupsPath: /eve/services/xen-tools
     oomScoreAdj: -999
-  - name: wwan
-    image: WWAN_TAG
-    cgroupsPath: /eve/services/wwan
-    oomScoreAdj: -999
 files:
   - path: /etc/eve-release
     source: eve_version
   - path: /etc/linuxkit-eve-config.yml
     metadata: yaml
   - path: /etc/eve-hv-type
-    contents: 'EVE_HV'
+    contents: "EVE_HV"
   - path: /etc/issue
     source: etc_issue
   - path: /opt/vendor
     directory: true
   - path: /etc/eve-platform
-    contents: 'EVE_PLATFORM'
+    contents: "EVE_PLATFORM"
   - path: /etc/ext-verity-roothash
     source: ext-verity-roothash
     optional: true
