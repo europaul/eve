@@ -1067,7 +1067,24 @@ eve-split: $(ROOTFS_CORE_IMG) $(ROOTFS_EXT_IMG) $(EVE_SPLIT_ARTIFACTS) current $
 	cp images/out/*.yml $|
 	$(PARSE_PKGS) pkg/eve/Dockerfile.in > $|/Dockerfile
 	sed -i 's|#SPLIT_ROOTFS_LABEL#|LABEL org.lfedge.eci.artifact.disk-0="/bits/rootfs-ext.img"|' $|/Dockerfile
+	@# The placeholder is a Dockerfile comment, so a failed substitution would
+	@# silently produce an image whose Extension cannot be recovered from CAS.
+	@grep -q 'org.lfedge.eci.artifact.disk-0' $|/Dockerfile || { \
+		echo "ERROR: disk-0 label not substituted into $|/Dockerfile"; \
+		echo "       (is the #SPLIT_ROOTFS_LABEL# placeholder still in pkg/eve/Dockerfile.in?)"; \
+		exit 1; \
+	}
 	$(LINUXKIT) $(DASH_V) pkg $(LINUXKIT_PKG_TARGET) $(LINUXKIT_ORG_TARGET) $(LINUXKIT_OPTS) --platforms linux/$(ZARCH) --hash-path $(CURDIR) --hash $(ROOTFS_VERSION)-$(HV) --docker $(if $(strip $(EVE_REL)),--release) $(EVE_REL)$(if $(strip $(EVE_REL)),-$(HV)) $(FORCE_BUILD) $|
+	@# extsloader routes the Extension out of CAS via this label; without it
+	@# self-heal extracts nothing and only fails once recovery is needed.
+	@label=$$(docker inspect --format '{{index .Config.Labels "org.lfedge.eci.artifact.disk-0"}}' \
+		lfedge/eve:$(ROOTFS_VERSION)-$(HV) 2>/dev/null); \
+	if [ "$$label" != "/bits/rootfs-ext.img" ]; then \
+		echo "ERROR: split OCI image lfedge/eve:$(ROOTFS_VERSION)-$(HV) is missing"; \
+		echo "       org.lfedge.eci.artifact.disk-0 (got \"$$label\")"; \
+		exit 1; \
+	fi; \
+	echo "split OCI image: disk-0 label = $$label"
 	rm -f $(INSTALLER)/rootfs.img
 	$(QUIET): $@: Succeeded
 else
