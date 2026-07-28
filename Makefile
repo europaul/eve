@@ -978,6 +978,20 @@ live-multirootfs: multi_rootfs $(BIOS_IMG) current
 universal_rootfs: $(ROOTFS_UNIVERSAL_IMG) current
 	$(QUIET): "$@: Succeeded, ROOTFS_UNIVERSAL_IMG=$(ROOTFS_UNIVERSAL_IMG)"
 
+# Config symbols the split rootfs needs from the kernel: the Extension is a
+# compressed erofs image mounted through dm-verity.
+SPLIT_KERNEL_CONFIG=CONFIG_BLK_DEV_DM CONFIG_DM_VERITY CONFIG_EROFS_FS CONFIG_EROFS_FS_ZIP
+
+# A kernel without those options yields an image that installs and boots but
+# whose Extension can never be mounted, and the only symptom is a mount failure
+# on device. Order-only so it gates the build without forcing rebuilds.
+.PHONY: check-split-kernel
+check-split-kernel:
+	$(QUIET)LINUXKIT=$(LINUXKIT) ZARCH=$(ZARCH) ./tools/check-kernel-config.sh \
+		$(KERNEL_TAG) $(SPLIT_KERNEL_CONFIG)
+
+$(ROOTFS_CORE_IMG) $(ROOTFS_EXT_IMG): | check-split-kernel
+
 # Split rootfs is always universal (HV=uni). These targets force HV=uni
 # so callers don't need to remember. Use _split_rootfs_impl for the
 # actual build when HV is already set.
