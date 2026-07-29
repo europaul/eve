@@ -4,6 +4,7 @@
 package splitrootfs_test
 
 import (
+	"encoding/json"
 	"strings"
 	"time"
 
@@ -23,6 +24,14 @@ const (
 
 	// shortSSHTimeout bounds a single quick shell command executed on the device.
 	shortSSHTimeout = 30 * time.Second
+
+	// extsloaderStatusFile is where the socketdriver materializes extsloader's
+	// ExtsloaderStatus publication ("global" is the only key it ever uses).
+	extsloaderStatusFile = "/run/extsloader/ExtsloaderStatus/global.json"
+
+	// extsloaderStateReady mirrors types.ExtsloaderStateReady
+	// (0=starting, 1=ready, 2=failed).
+	extsloaderStateReady uint8 = 1
 )
 
 // upgradeToSplitImage drives an EVE base-OS update to a split (universal) OCI
@@ -126,6 +135,26 @@ func waitForSplitBaseOS(t Gomega, device *evetest.EdgeDevice,
 	}
 }
 
+// extsloaderStatus mirrors the fields of types.ExtsloaderStatus that this test
+// asserts on. It is declared locally rather than imported because the evetest
+// container is compiled against a pinned published pkg/pillar that predates the
+// type (see assertExtensionHealthy).
+type extsloaderStatus struct {
+	State     uint8
+	Reason    string
+	Partition string
+	ImagePath string
+}
+
+// readExtsloaderStatus reads and decodes extsloader's published status.
+func readExtsloaderStatus(g Gomega, device *evetest.EdgeDevice) extsloaderStatus {
+	var status extsloaderStatus
+	g.Expect(device.FileExists(extsloaderStatusFile)).To(BeTrue(),
+		"%s does not exist -- extsloader published no status", extsloaderStatusFile)
+	g.Expect(json.Unmarshal(device.ReadFile(extsloaderStatusFile), &status)).To(Succeed())
+	return status
+}
+
 // assertExtensionHealthy asserts that the Extension (disk-0) layer is loaded and
 // healthy on the device: it is mounted read-only at /persist/exts, the mount is
 // dm-verity-backed, and extsloader reports it started all Extension services.
@@ -135,16 +164,10 @@ func waitForSplitBaseOS(t Gomega, device *evetest.EdgeDevice,
 // separate Go module whose container is compiled against a PINNED published
 // pkg/pillar that predates types.ExtsloaderStatus, and the container mounts only
 // evetest/tests (not the local pkg/pillar), so importing the new type does not
-// build where the test actually runs. Everything in EVE is asynchronous, so the
-// probes are wrapped in Eventually (extsloader may still be
-// mounting/self-healing the Extension right after boot).
-//
-// TODO: switch to an API-level assertion
-// (evetest.ReadPublication[types.ExtsloaderStatus] -> State==Ready) once the
-// evetest container is rebuilt against a pkg/pillar that includes
-// ExtsloaderStatus (via `make bump-eve-pillar` after the split-rootfs pillar
-// changes are published). A local `replace` in evetest/go.mod is NOT sufficient
-// -- it is ignored by the containerized build.
+// build where the test actually runs. Reading the published JSON over ssh is the
+// closest we get to an API-level assertion until that type is published.
+// Everything in EVE is asynchronous, so the probes are wrapped in Eventually
+// (extsloader may still be mounting/self-healing the Extension right after boot).
 func assertExtensionHealthy(t Gomega, device *evetest.EdgeDevice, timeout time.Duration) {
 	t.Eventually(func(g Gomega) {
 		// Extension mounted at the expected point.
@@ -163,13 +186,13 @@ func assertExtensionHealthy(t Gomega, device *evetest.EdgeDevice, timeout time.D
 		g.Expect(ver).To(ContainSubstring("verity"),
 			"Extension is not backed by a dm-verity device")
 
-		// extsloader reached its terminal Ready state (started all services).
-		rdy, _, err := device.RunShellScript(
-			`logread | grep -q "All services started successfully" && echo ready || echo notready`,
-			shortSSHTimeout, 0)
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(rdy).To(ContainSubstring("ready"),
-			"extsloader has not reported all Extension services started")
+		// extsloader published its terminal Ready state. This reads the
+		// ExtsloaderStatus pubsub object -- the same signal nodeagent gates
+		// update success on -- rather than scraping logs.
+		status := readExtsloaderStatus(g, device)
+		g.Expect(status.State).To(Equal(extsloaderStateReady),
+			"extsloader state is %d (want %d=ready), reason: %q",
+			status.State, extsloaderStateReady, status.Reason)
 	}, timeout, 10*time.Second).Should(Succeed())
 }
 
@@ -190,14 +213,32 @@ func assertCoreExpectsExtension(t Gomega, device *evetest.EdgeDevice) {
 // from a monolithic EVE whose baseosmgr cannot pre-extract the Extension, so
 // extsloader must reconstruct it from the CAS on first boot of the split image.
 //
-// TODO: replace with an ExtsloaderStatus.Source pubsub field once added to
-// pillar, so this becomes an API-level assertion instead of a log-scrape.
+// It proves this from the Extension file's provenance rather than from a log
+// entry: the file must have been created *after* the split image booted, since a
+// pre-extracted Extension would have been written by the previous EVE before the
+// reboot. Provenance is durable state; the log entry is not. extsloader logs the
+// self-heal exactly once, within the first minute of boot, and that window
+// survives neither the on-device ring buffer (~5000 lines, which the Extension
+// services' own debug logging churns through in about a minute) nor the log
+// stream shipped to the controller (which only starts once newlogd is up).
+//
+// TODO: assert on an ExtsloaderStatus.Source pubsub field instead, once pillar
+// records how the Extension was obtained, making provenance explicit rather
+// than inferred.
 func assertExtensionSelfHealed(t Gomega, device *evetest.EdgeDevice) {
+	status := readExtsloaderStatus(t, device)
+	t.Expect(status.ImagePath).NotTo(BeEmpty(),
+		"extsloader published no Extension image path")
+
+	// btime is the kernel boot wall-clock time in seconds since the epoch.
 	out, _, err := device.RunShellScript(
-		`logread | grep -q "Extension image recovered from CAS to .* (self-heal)" `+
-			`&& echo self-healed || echo other`,
+		`boot=$(grep '^btime ' /proc/stat | cut -d' ' -f2); `+
+			`mtime=$(stat -c %Y `+status.ImagePath+`); `+
+			`echo "boot=$boot mtime=$mtime"; `+
+			`[ "$mtime" -gt "$boot" ] && echo self-healed || echo pre-existing`,
 		shortSSHTimeout, 0)
 	t.Expect(err).NotTo(HaveOccurred())
-	t.Expect(strings.TrimSpace(out)).To(Equal("self-healed"),
-		"Extension image was not self-healed from the CAS")
+	t.Expect(out).To(ContainSubstring("self-healed"),
+		"Extension %s predates this boot, so it was not self-healed from the CAS (%s)",
+		status.ImagePath, strings.TrimSpace(out))
 }
