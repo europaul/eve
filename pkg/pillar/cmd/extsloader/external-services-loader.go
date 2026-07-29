@@ -143,10 +143,16 @@ type externalServicesContext struct {
 	scanTrigger          chan string
 	pkgsImgPath          string
 	pkgsImgMounted       bool
-	servicesStarted      map[string]bool
-	servicesSkipped      map[string]bool // services intentionally not started
-	containerdClient     *containerd.Client
-	ctx                  context.Context
+	// mountAttempted records that mountPkgsImg has already run. Mount and
+	// service-start failures extend PCR12 with a terminal sentinel, so they
+	// must not be retried: a second attempt would extend PCR12 again and make
+	// the value depend on the retry count. Discovery failures extend nothing,
+	// which is what makes them safe to retry.
+	mountAttempted   bool
+	servicesStarted  map[string]bool
+	servicesSkipped  map[string]bool // services intentionally not started
+	containerdClient *containerd.Client
+	ctx              context.Context
 }
 
 type extensionLoaderState struct {
@@ -398,8 +404,16 @@ func handleContentTreeStatusImpl(ctxArg interface{}, key string, statusArg inter
 	triggerExtensionRescan(ctx, fmt.Sprintf("ContentTreeStatus %s", key))
 }
 
+// canRetryDiscovery reports whether another discovery attempt is worth making:
+// an Extension is expected, none is mounted, and no mount has been attempted
+// yet (see externalServicesContext.mountAttempted for why that last condition
+// matters for PCR12).
+func canRetryDiscovery(ctx *externalServicesContext) bool {
+	return !ctx.pkgsImgMounted && !ctx.mountAttempted && coreExpectsExtension()
+}
+
 func shouldTriggerRescanOnBaseOsStatus(ctx *externalServicesContext, status types.BaseOsStatus) bool {
-	if ctx.pkgsImgMounted || !coreExpectsExtension() {
+	if !canRetryDiscovery(ctx) {
 		return false
 	}
 	currentPart := zboot.GetCurrentPartition()
@@ -407,7 +421,7 @@ func shouldTriggerRescanOnBaseOsStatus(ctx *externalServicesContext, status type
 }
 
 func shouldTriggerRescanOnContentTreeStatus(ctx *externalServicesContext, status types.ContentTreeStatus) bool {
-	if ctx.pkgsImgMounted || !coreExpectsExtension() {
+	if !canRetryDiscovery(ctx) {
 		return false
 	}
 	currentPart := zboot.GetCurrentPartition()
@@ -512,6 +526,7 @@ func tryMountAndStartServices(ctx *externalServicesContext) {
 	// and for PCR12 measurement. No separate file hash is needed: the root
 	// hash is the Merkle tree root and uniquely identifies the image content.
 	log.Functionf("Attempting to mount extension image...")
+	ctx.mountAttempted = true
 	rootHash, err := mountPkgsImg(pkgsImgPath)
 	if err != nil {
 		log.Errorf("Failed to mount extension image: %v", err)
