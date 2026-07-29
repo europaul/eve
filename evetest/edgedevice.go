@@ -451,8 +451,11 @@ func (t *BaseOSDatastoreType) FromString(s string) error {
 // show a FAILED status instead of waiting for it to become active.
 // A reverted upgrade causes two reboots (one to try the new version, one to
 // revert), so the expected reboot count is incremented accordingly.
+// Returns the EVE short version read from the target image, i.e. the version the
+// device will report for it. For universal split images that is the "-uni-<arch>"
+// tag, not the "-<hv>-<arch>" tag the image is fetched from.
 func (d *EdgeDevice) UpgradeEVE(targetEVEVersion string, targetEVEHypervisor Hypervisor,
-	datastoreType BaseOSDatastoreType, waitUntilUpgraded bool, expectRevert bool) {
+	datastoreType BaseOSDatastoreType, waitUntilUpgraded bool, expectRevert bool) string {
 
 	// Read current device arch (set during Setup).
 	d.th.devicesM.Lock()
@@ -483,9 +486,8 @@ func (d *EdgeDevice) UpgradeEVE(targetEVEVersion string, targetEVEHypervisor Hyp
 	// does for a fresh device, so an explicitly requested target version is
 	// honoured (and must be built locally) while an unset one means the newest.
 	if datastoreType == BaseOSDatastoreHTTP && LocalLiveImageRequested() {
-		d.upgradeEVEFromLocalBuild(targetEVEVersion, currentImageRef.Arch,
+		return d.upgradeEVEFromLocalBuild(targetEVEVersion, currentImageRef.Arch,
 			currentImageRef.Hypervisor, waitUntilUpgraded, expectRevert)
-		return
 	}
 
 	targetImageRef := &api.ImageRef{
@@ -536,7 +538,7 @@ func (d *EdgeDevice) UpgradeEVE(targetEVEVersion string, targetEVEHypervisor Hyp
 		config := d.GetConfig()
 		config.SetBaseOS(dockerContainer, shortVersion)
 		d.applyUpgradeConfig(config, shortVersion, waitUntilUpgraded, expectRevert)
-		return
+		return shortVersion
 	}
 
 	// Extract rootfs (cache by short version to avoid re-extraction on reuse).
@@ -562,6 +564,7 @@ func (d *EdgeDevice) UpgradeEVE(targetEVEVersion string, targetEVEHypervisor Hyp
 
 	d.applyUpgradeOverHTTP(rootfsPath, rootfsFilename, shortVersion,
 		waitUntilUpgraded, expectRevert)
+	return shortVersion
 }
 
 // upgradeEVEFromLocalBuild delivers an upgrade from a local build's own
@@ -571,7 +574,7 @@ func (d *EdgeDevice) UpgradeEVE(targetEVEVersion string, targetEVEHypervisor Hyp
 // as it was built.
 func (d *EdgeDevice) upgradeEVEFromLocalBuild(targetEVEVersion string,
 	arch api.ArchType, runningHypervisor api.HypervisorType,
-	waitUntilUpgraded, expectRevert bool) {
+	waitUntilUpgraded, expectRevert bool) string {
 
 	zarch, err := zarchDirName(arch)
 	if err != nil {
@@ -626,6 +629,7 @@ func (d *EdgeDevice) upgradeEVEFromLocalBuild(targetEVEVersion string,
 
 	d.applyUpgradeOverHTTP(rootfsPath, rootfsFilename, img.ShortVersion,
 		waitUntilUpgraded, expectRevert)
+	return img.ShortVersion
 }
 
 // applyUpgradeOverHTTP points the device's BaseOS config at a rootfs image
