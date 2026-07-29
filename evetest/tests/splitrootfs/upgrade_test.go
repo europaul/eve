@@ -22,9 +22,6 @@ import (
 const (
 	initialEVEVersionParamKey = "INITIAL_EVE_VERSION"
 	initialHypervisorParamKey = "INITIAL_HYPERVISOR"
-	splitImageDomainParamKey  = "SPLIT_IMAGE_DOMAIN"
-	splitImageRepoParamKey    = "SPLIT_IMAGE_REPO"
-	splitImageTagParamKey     = "SPLIT_IMAGE_TAG"
 
 	appSSHUser     = "root"
 	appSSHPassword = "testpassword"
@@ -74,21 +71,16 @@ const (
 //     the device is not in degraded mode (checkpoint "post-upgrade-verified").
 //
 // Parameters:
-//   - EVE_VERSION: standard target-version parameter; not used as the update
-//     target here (the target is the explicit split OCI image below), defined
-//     only for framework/suite consistency.
+//   - EVE_VERSION: the split (universal) EVE version to update to. The image is
+//     fetched from the "<EVE_VERSION>-<HYPERVISOR>-<arch>" tag; the version the
+//     device then reports is read from the image itself, so no assumption is made
+//     that the two coincide.
 //   - HYPERVISOR: target hypervisor (default: kvm).
 //   - TPM: enable TPM emulation (default: true).
 //   - DISK_SIZE_MB: device disk size in MiB (0 = framework default).
 //   - INITIAL_EVE_VERSION: monolithic EVE version to start on (required; default
 //     "16.0.0-lts").
 //   - INITIAL_HYPERVISOR: hypervisor of the initial version (default: kvm).
-//   - SPLIT_IMAGE_DOMAIN: registry domain of the split image
-//     (default "index.docker.io").
-//   - SPLIT_IMAGE_REPO: registry repo of the split image (default "lfedge/eve").
-//   - SPLIT_IMAGE_TAG: split OCI tag to update to (required, e.g.
-//     "0.0.0-abcdef-uni-amd64"). The EVE-reported short version equals this tag
-//     for universal split images.
 func TestSplitUpgradeFromMonolith(test *testing.T) {
 	evetestT := evetest.Init(test)
 	t := NewGomegaWithT(evetestT)
@@ -117,52 +109,19 @@ func TestSplitUpgradeFromMonolith(test *testing.T) {
 				AllowedValues: "kvm|xen|kubevirt",
 			},
 		},
-		evetest.TestParameterDefinition{
-			Key:          splitImageDomainParamKey,
-			DefaultValue: "index.docker.io",
-			Description: evetest.TestParameterDescription{
-				Summary: "Registry domain hosting the split (universal) EVE OCI image",
-				Default: "index.docker.io",
-			},
-		},
-		evetest.TestParameterDefinition{
-			Key:          splitImageRepoParamKey,
-			DefaultValue: "lfedge/eve",
-			Description: evetest.TestParameterDescription{
-				Summary: "Registry repository of the split (universal) EVE OCI image",
-				Default: "lfedge/eve",
-			},
-		},
-		evetest.TestParameterDefinition{
-			Key:          splitImageTagParamKey,
-			DefaultValue: "",
-			Description: evetest.TestParameterDescription{
-				Summary: "OCI tag of the split (universal) EVE image to update to " +
-					"(e.g. \"0.0.0-abcdef-uni-amd64\"); the EVE-reported short version " +
-					"equals this tag",
-				Default: "(required)",
-			},
-		},
 	)
 
 	// Get parameter values set for this test execution.
 	withTPM := evetest.GetTPMParameterValue()
 	diskSizeMiB := evetest.GetDiskSizeMiBParameterValue()
+	targetVersion := evetest.GetEVEVersionParameterValue()
+	targetHypervisor := evetest.GetHypervisorParameterValue()
 	initialVersion := evetest.GetTestParameter[string](initialEVEVersionParamKey)
 	if initialVersion == "" {
 		evetestT.Fatalf("%s%s is required for TestSplitUpgradeFromMonolith",
 			constants.EnvPrefix, initialEVEVersionParamKey)
 	}
 	initialHypervisor := evetest.GetTestParameter[evetest.Hypervisor](initialHypervisorParamKey)
-	splitImageDomain := evetest.GetTestParameter[string](splitImageDomainParamKey)
-	splitImageRepo := evetest.GetTestParameter[string](splitImageRepoParamKey)
-	splitImageTag := evetest.GetTestParameter[string](splitImageTagParamKey)
-	if splitImageTag == "" {
-		evetestT.Fatalf("%s%s is required for TestSplitUpgradeFromMonolith",
-			constants.EnvPrefix, splitImageTagParamKey)
-	}
-	// For universal split images, EVE reports the OCI tag as its short version.
-	expectedShortVersion := splitImageTag
 
 	const devName = "edge-dev"
 	evetest.Setup(
@@ -262,8 +221,7 @@ func TestSplitUpgradeFromMonolith(test *testing.T) {
 	evetest.Checkpoint("pre-upgrade")
 
 	// Update the base OS to the split image (expect success, no revert).
-	upgradeToSplitImage(t, device, splitImageDomain, splitImageRepo, splitImageTag,
-		expectedShortVersion, false)
+	upgradeToSplitImage(t, device, targetVersion, targetHypervisor, false)
 
 	evetest.Checkpoint("upgrade-complete")
 

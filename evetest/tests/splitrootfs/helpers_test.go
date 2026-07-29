@@ -44,37 +44,34 @@ const (
 	extsloaderStateReady uint8 = 1
 )
 
-// upgradeToSplitImage drives an EVE base-OS update to a split (universal) OCI
-// image and waits for the target to reach its terminal state.
+// upgradeToSplitImage drives an EVE base-OS update to a split (universal) image
+// and waits for the target to reach its terminal state. It returns the EVE short
+// version the device reports for the target image.
 //
-// It deliberately does NOT use the framework's built-in EdgeDevice.UpgradeEVE.
-// UpgradeEVE flattens the image into a single rootfs.img served over plain HTTP,
-// which drops the Extension (disk-0) layer and never populates the containerd
-// content-addressable store (CAS). Split-rootfs instead needs the whole OCI
-// image delivered through a registry datastore, so that baseosmgr can extract
-// the Extension layer and extsloader can CAS-self-heal it if needed. We
-// therefore drive the update directly via SetBaseOS(DockerContainer{...}).
+// The update goes through a registry datastore rather than the framework's
+// default HTTP rootfs delivery: flattening the image to a single rootfs.img keeps
+// only the Core, dropping the Extension (disk-0) layer, and never populates the
+// containerd content-addressable store (CAS) that baseosmgr extracts the
+// Extension from and extsloader self-heals it from.
 //
-// expectedShortVersion is the EVE short version the device is expected to report
-// for the target image (for universal split images this equals the OCI tag).
+// The wait is done here rather than by UpgradeEVE so that a stalled update dumps
+// Extension diagnostics instead of just timing out.
 // When expectRevert is true, the update is expected to be rejected and the
 // device to roll back to the previous version.
 func upgradeToSplitImage(t Gomega, device *evetest.EdgeDevice,
-	imageDomain, imageRepo, imageTag, expectedShortVersion string,
-	expectRevert bool) {
+	targetVersion string, targetHypervisor evetest.Hypervisor,
+	expectRevert bool) string {
 	log := evetest.Logger()
-	log.Infof("Updating base OS to split image %s/%s:%s (expected version %q)",
-		imageDomain, imageRepo, imageTag, expectedShortVersion)
+	log.Infof("Updating base OS to split image %s (%s) via registry datastore",
+		targetVersion, targetHypervisor)
 
-	config := device.GetConfig()
-	config.SetBaseOS(evetest.DockerContainer{
-		Domain:    imageDomain,
-		ImageName: imageRepo,
-		Tag:       imageTag,
-	}, expectedShortVersion)
-	device.ApplyConfig(config, false, false)
+	shortVersion := device.UpgradeEVE(targetVersion, targetHypervisor,
+		false, expectRevert,
+		evetest.WithUpgradeDelivery(evetest.UpgradeDeliveryOCIRegistry))
+	log.Infof("Target split image reports EVE short version %q", shortVersion)
 
-	waitForSplitBaseOS(t, device, expectedShortVersion, expectRevert, splitUpgradeTimeout)
+	waitForSplitBaseOS(t, device, shortVersion, expectRevert, splitUpgradeTimeout)
+	return shortVersion
 }
 
 // waitForSplitBaseOS blocks until the device reaches the terminal state of a
