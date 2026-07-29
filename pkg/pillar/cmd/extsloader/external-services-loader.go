@@ -32,6 +32,7 @@ import (
 	"github.com/google/go-tpm/legacy/tpm2"
 	"github.com/google/go-tpm/tpmutil"
 	"github.com/lf-edge/edge-containers/pkg/registry"
+	info "github.com/lf-edge/eve-api/go/info"
 	"github.com/lf-edge/eve/pkg/pillar/agentbase"
 	"github.com/lf-edge/eve/pkg/pillar/agentlog"
 	"github.com/lf-edge/eve/pkg/pillar/base"
@@ -146,6 +147,7 @@ type externalServicesContext struct {
 	subGlobalConfig      pubsub.Subscription
 	subBaseOsStatus      pubsub.Subscription
 	subContentTreeStatus pubsub.Subscription
+	subVaultStatus       pubsub.Subscription
 	pubExtsloaderStatus  pubsub.Publication
 	scanTrigger          chan string
 	pkgsImgPath          string
@@ -294,6 +296,28 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 		ctx.subContentTreeStatus = subContentTreeStatus
 	}
 
+	// Subscribe to VaultStatus (from vaultmgr) for CAS self-heal. The CAS is
+	// inside the vault, so an unlocked vault is what makes recovery possible.
+	// This does not invert the extsloader/vaultmgr ordering: vaultmgr waits for
+	// our terminal state, and we never block on VaultStatus before publishing
+	// it -- a locked vault just yields a Failed state we later retry out of.
+	subVaultStatus, err := ps.NewSubscription(pubsub.SubscriptionOptions{
+		AgentName:     "vaultmgr",
+		MyAgentName:   agentName,
+		TopicImpl:     types.VaultStatus{},
+		Activate:      true,
+		Ctx:           ctx,
+		CreateHandler: handleVaultStatusCreate,
+		ModifyHandler: handleVaultStatusModify,
+		WarningTime:   warningTime,
+		ErrorTime:     errorTime,
+	})
+	if err != nil {
+		log.Errorf("VaultStatus subscription failed: %v", err)
+	} else {
+		ctx.subVaultStatus = subVaultStatus
+	}
+
 	// Connect to containerd
 	log.Noticef("Connecting to containerd at %s", containerdSock)
 	log.Functionf("Using containerd namespace: %s", containerdNamespace)
@@ -316,12 +340,15 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	log.Noticef("%s initial setup complete - entering main loop", agentName)
 
 	// Prepare channels for pubsub subscriptions (nil channels are never selected)
-	var baseOsChan, contentTreeChan <-chan pubsub.Change
+	var baseOsChan, contentTreeChan, vaultChan <-chan pubsub.Change
 	if ctx.subBaseOsStatus != nil {
 		baseOsChan = ctx.subBaseOsStatus.MsgChan()
 	}
 	if ctx.subContentTreeStatus != nil {
 		contentTreeChan = ctx.subContentTreeStatus.MsgChan()
+	}
+	if ctx.subVaultStatus != nil {
+		vaultChan = ctx.subVaultStatus.MsgChan()
 	}
 
 	// Run forever
@@ -333,6 +360,8 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 			ctx.subBaseOsStatus.ProcessChange(change)
 		case change := <-contentTreeChan:
 			ctx.subContentTreeStatus.ProcessChange(change)
+		case change := <-vaultChan:
+			ctx.subVaultStatus.ProcessChange(change)
 		}
 	}
 }
@@ -425,6 +454,42 @@ func handleContentTreeStatusImpl(ctxArg interface{}, key string, statusArg inter
 		return
 	}
 	triggerExtensionRescan(ctx, fmt.Sprintf("ContentTreeStatus %s", key))
+}
+
+func handleVaultStatusCreate(ctxArg interface{}, key string, statusArg interface{}) {
+	handleVaultStatusImpl(ctxArg, key, statusArg)
+}
+
+func handleVaultStatusModify(ctxArg interface{}, key string, statusArg interface{}, oldStatusArg interface{}) {
+	handleVaultStatusImpl(ctxArg, key, statusArg)
+}
+
+func handleVaultStatusImpl(ctxArg interface{}, key string, statusArg interface{}) {
+	ctx := ctxArg.(*externalServicesContext)
+	status, ok := statusArg.(types.VaultStatus)
+	if !ok {
+		return
+	}
+	if !shouldTriggerRescanOnVaultStatus(ctx, status) {
+		return
+	}
+	triggerExtensionRescan(ctx, fmt.Sprintf("VaultStatus %s operational", key))
+}
+
+// shouldTriggerRescanOnVaultStatus reports whether a VaultStatus update means
+// the CAS may have just become readable. The Extension image is recovered from
+// containerd's content store under types.ContainerdDir, which lives inside the
+// vault, so a locked vault makes self-heal impossible no matter how many
+// BaseOsStatus/ContentTreeStatus updates have arrived.
+func shouldTriggerRescanOnVaultStatus(ctx *externalServicesContext, status types.VaultStatus) bool {
+	if !canRetryDiscovery(ctx) {
+		return false
+	}
+	if status.Name != types.DefaultVaultName {
+		return false
+	}
+	return status.Status != info.DataSecAtRestStatus_DATASEC_AT_REST_ERROR &&
+		status.ConversionComplete
 }
 
 // canRetryDiscovery reports whether another discovery attempt is worth making:
