@@ -17,10 +17,20 @@ import (
 
 const (
 	// splitUpgradeTimeout bounds how long we wait for the device to fetch,
-	// extract and boot a split (universal) EVE image. Extracting the Extension
-	// (disk-0) layer and self-healing it into the CAS can take a while on a
-	// slow/virtualized target, so the timeout is generous.
-	splitUpgradeTimeout = 30 * time.Minute
+	// extract and boot a split (universal) EVE image. It must cover the
+	// download, the partition write, the reboot and the whole nodeagent testing
+	// window (shortened to updateTestWindow below).
+	splitUpgradeTimeout = 20 * time.Minute
+
+	// updateTestWindow is the value we set for timer.test.baseimage.update, the
+	// period nodeagent waits after booting the new partition before declaring
+	// the update successful. The default is 10 minutes, which dominates the
+	// runtime of this test. It cannot be cut much further: on the first boot of
+	// the split image the Extension has to be self-healed out of the CAS, which
+	// itself waits for the vault to be unlocked with a controller-escrowed key,
+	// and nodeagent rolls the update back if extsloader is not Ready by the time
+	// the window expires.
+	updateTestWindow = 5 * time.Minute
 
 	// shortSSHTimeout bounds a single quick shell command executed on the device.
 	shortSSHTimeout = 30 * time.Second
@@ -127,12 +137,59 @@ func waitForSplitBaseOS(t Gomega, device *evetest.EdgeDevice,
 			if expectRevert {
 				verb = "revert from"
 			}
+			// A bare timeout says nothing about which stage stalled, so dump the
+			// Extension/vault state before failing.
+			logExtensionDiagnostics(device)
 			t.Expect(false).To(BeTrue(),
-				"timed out after %s waiting for device to %s split image %s",
-				timeout, verb, targetShortVersion)
+				"timed out after %s waiting for device to %s split image %s "+
+					"(last state=%s, status=%s)",
+				timeout, verb, targetShortVersion, lastState, lastStatus)
 			return
 		}
 	}
+}
+
+// extensionDiagnosticsScript collects the state of every stage the
+// monolith-to-split update depends on: which partition booted and its state, the
+// Extension file on PERSIST, the verity mount, the vault (the CAS lives inside
+// it, so a locked vault blocks self-heal), and the BaseOsStatus/ContentTreeStatus
+// that self-heal resolves the CAS reference from.
+const extensionDiagnosticsScript = `
+echo "===== zboot ====="
+zboot curpart 2>&1
+for p in IMGA IMGB; do echo "$p: $(zboot partstate $p 2>&1)"; done
+echo "===== extsloader status ====="
+cat ` + extsloaderStatusFile + ` 2>&1
+echo "===== extension image files ====="
+ls -la /persist/ext-img*.img /persist/ext-img*.img.tmp 2>&1
+echo "===== mount / verity ====="
+mountpoint /persist/exts 2>&1
+ls -la /dev/mapper/ 2>&1
+echo "===== vault ====="
+cat /run/vaultmgr/VaultStatus/*.json 2>&1
+echo "===== baseos / content tree ====="
+ls /run/baseosmgr/BaseOsStatus/ /run/volumemgr/ContentTreeStatus/ 2>&1
+`
+
+// logExtensionDiagnostics dumps extsloader's log and extensionDiagnosticsScript
+// into the test log. Best-effort: it runs on a device that is already
+// misbehaving, so failures are reported rather than propagated. The logs come
+// from the controller-side stream, which still works when the Extension is down
+// -- sshd ships in the Extension, so the shell probes are the part that may be
+// unavailable in exactly the failure this is meant to explain.
+func logExtensionDiagnostics(device *evetest.EdgeDevice) {
+	log := evetest.Logger()
+
+	for _, entry := range device.GetLogs(evetest.LogMsgMatch{Source: "extsloader"}) {
+		log.Infof("extsloader log: %s %s", entry.Timestamp.Format(time.RFC3339), entry.Message)
+	}
+
+	out, _, err := device.RunShellScript(extensionDiagnosticsScript, 2*time.Minute, 0)
+	if err != nil {
+		log.Errorf("Failed to collect Extension diagnostics over ssh: %v", err)
+		return
+	}
+	log.Infof("Extension diagnostics:\n%s", out)
 }
 
 // extsloaderStatus mirrors the fields of types.ExtsloaderStatus that this test
@@ -169,6 +226,15 @@ func readExtsloaderStatus(g Gomega, device *evetest.EdgeDevice) extsloaderStatus
 // Everything in EVE is asynchronous, so the probes are wrapped in Eventually
 // (extsloader may still be mounting/self-healing the Extension right after boot).
 func assertExtensionHealthy(t Gomega, device *evetest.EdgeDevice, timeout time.Duration) {
+	// Gomega aborts via runtime.Goexit, so the deferred dump still runs and
+	// gives the failure some context.
+	healthy := false
+	defer func() {
+		if !healthy {
+			logExtensionDiagnostics(device)
+		}
+	}()
+
 	t.Eventually(func(g Gomega) {
 		// Extension mounted at the expected point.
 		mnt, _, err := device.RunShellScript(
@@ -194,6 +260,8 @@ func assertExtensionHealthy(t Gomega, device *evetest.EdgeDevice, timeout time.D
 			"extsloader state is %d (want %d=ready), reason: %q",
 			status.State, extsloaderStateReady, status.Reason)
 	}, timeout, 10*time.Second).Should(Succeed())
+
+	healthy = true
 }
 
 // assertCoreExpectsExtension asserts that the running core rootfs is a split

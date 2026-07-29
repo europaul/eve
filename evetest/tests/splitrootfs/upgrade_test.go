@@ -181,6 +181,9 @@ func TestSplitUpgradeFromMonolith(test *testing.T) {
 	// Apply initial device config: management adapter, a local network instance,
 	// and a container app reachable over SSH.
 	devConfig := evetest.NewEdgeDeviceConfig(devName)
+	cfgProps := types.NewConfigItemValueMap()
+	cfgProps.SetGlobalValueInt(types.MintimeUpdateSuccess, uint32(updateTestWindow.Seconds()))
+	devConfig.SetConfigProperties(cfgProps)
 	networkUUID := devConfig.AddNetwork(evetest.DHCPNetworkConfig{
 		NetworkType: evecommon.NetworkType_V4,
 	})
