@@ -58,6 +58,13 @@ const (
 	containerdSock       = "/run/containerd/containerd.sock"
 	containerdNamespace  = "services.linuxkit"
 	scanInterval         = 30 * time.Second
+	// discoveryRetryWindow bounds how long the periodic timer keeps retrying
+	// Extension discovery while nothing is mounted. It must outlast the vault
+	// becoming operational (which on the first boot after an OTA requires
+	// onboarding plus a controller-escrowed key) and the nodeagent update
+	// testing window. Devices with nothing to recover stop retrying after it;
+	// VaultStatus and BaseOsStatus/ContentTreeStatus triggers stay active.
+	discoveryRetryWindow = 15 * time.Minute
 	hvTypePath           = "/run/eve-hv-type"
 	// stateFilePath kept for backward compatibility with Eden tests reading it via SSH.
 	// TODO: remove once tests switch to pubsub-derived checking.
@@ -331,8 +338,9 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 }
 
 // scanForPkgsImg performs an initial extension scan, then reacts to rescan
-// triggers from pubsub updates. The periodic timer is used only to verify
-// already started services.
+// triggers from pubsub updates. The periodic timer verifies already started
+// services and, while nothing is mounted, retries discovery for
+// discoveryRetryWindow.
 func scanForPkgsImg(ctx *externalServicesContext) {
 	log.Noticef("scanForPkgsImg goroutine started")
 	ticker := time.NewTicker(scanInterval)
@@ -343,6 +351,7 @@ func scanForPkgsImg(ctx *externalServicesContext) {
 	ctx.ps.StillRunning(agentName, warningTime, errorTime)
 	tryMountAndStartServices(ctx)
 
+	retryDeadline := time.Now().Add(discoveryRetryWindow)
 	verifyCount := 0
 	for {
 		select {
@@ -354,11 +363,25 @@ func scanForPkgsImg(ctx *externalServicesContext) {
 			verifyCount++
 			log.Functionf("Periodic verification scan #%d", verifyCount)
 			ctx.ps.StillRunning(agentName, warningTime, errorTime)
-			if ctx.pkgsImgMounted {
+			switch {
+			case ctx.pkgsImgMounted:
 				log.Functionf("extension image already mounted, verifying services")
 				verifyServices(ctx)
-			} else {
-				log.Functionf("extension image not mounted; waiting for relevant pubsub updates")
+			case !canRetryDiscovery(ctx):
+				log.Functionf("extension image not mounted and discovery is not retryable; " +
+					"waiting for relevant pubsub updates")
+			case time.Now().After(retryDeadline):
+				log.Functionf("extension discovery retry window elapsed; " +
+					"waiting for relevant pubsub updates")
+			default:
+				// Retry here rather than only on pubsub events: the Extension
+				// can become recoverable long after the last BaseOsStatus or
+				// ContentTreeStatus update, because the CAS lives in the vault
+				// (types.ContainerdDir) and stays unreadable until the vault is
+				// unlocked -- which on the first boot after an OTA needs a
+				// controller-escrowed key.
+				log.Functionf("retrying extension discovery")
+				tryMountAndStartServices(ctx)
 			}
 		}
 	}
