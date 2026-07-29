@@ -512,9 +512,16 @@ func shouldTriggerRescanOnContentTreeStatus(ctx *externalServicesContext, status
 	if !canRetryDiscovery(ctx) {
 		return false
 	}
+	// Correlate with the BaseOsStatus of the running partition so app content
+	// trees do not trigger rescans. Until that BaseOsStatus exists there is
+	// nothing to correlate against, and dropping the event would lose the only
+	// notification if BaseOsStatus never changes again.
 	currentPart := zboot.GetCurrentPartition()
 	baseOSStatus := baseOsStatusForPartition(ctx, currentPart)
-	return baseOSStatus != nil && baseOSStatus.ContentTreeUUID == status.ContentID.String()
+	if baseOSStatus == nil {
+		return true
+	}
+	return baseOSStatus.ContentTreeUUID == status.ContentID.String()
 }
 
 func triggerExtensionRescan(ctx *externalServicesContext, reason string) {
