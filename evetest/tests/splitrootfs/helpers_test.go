@@ -11,21 +11,26 @@ import (
 	// revive:disable:dot-imports
 	. "github.com/onsi/gomega"
 
+	uuid "github.com/satori/go.uuid"
+
+	eveconfig "github.com/lf-edge/eve-api/go/config"
+	"github.com/lf-edge/eve-api/go/evecommon"
 	eveinfo "github.com/lf-edge/eve-api/go/info"
 	"github.com/lf-edge/eve/evetest"
+	"github.com/lf-edge/eve/pkg/pillar/types"
 )
 
 const (
-	// splitUpgradeTimeout bounds how long we wait for the device to fetch,
-	// extract and boot a split (universal) EVE image. It must cover the
-	// download, the partition write, the reboot and the whole nodeagent testing
-	// window (shortened to updateTestWindow below).
-	splitUpgradeTimeout = 20 * time.Minute
+	// baseOSUpdateTimeout bounds how long we wait for the device to fetch,
+	// extract and boot a new EVE image. It must cover the download, the
+	// partition write, the reboot and the whole nodeagent testing window
+	// (shortened to updateTestWindow below).
+	baseOSUpdateTimeout = 20 * time.Minute
 
 	// updateTestWindow is the value we set for timer.test.baseimage.update, the
 	// period nodeagent waits after booting the new partition before declaring
 	// the update successful. The default is 10 minutes, which dominates the
-	// runtime of this test. It cannot be cut much further: on the first boot of
+	// runtime of these tests. It cannot be cut much further: on the first boot of
 	// the split image the Extension has to be self-healed out of the CAS, which
 	// itself waits for the vault to be unlocked with a controller-escrowed key,
 	// and nodeagent rolls the update back if extsloader is not Ready by the time
@@ -42,40 +47,152 @@ const (
 	// extsloaderStateReady mirrors types.ExtsloaderStateReady
 	// (0=starting, 1=ready, 2=failed).
 	extsloaderStateReady uint8 = 1
+
+	// Credentials and port-forward of the container app the OTA tests deploy to
+	// prove the device keeps running workloads across a base-OS change.
+	appSSHUser     = "root"
+	appSSHPassword = "testpassword"
+	appSSHFwdPort  = 2222
+
+	// appSSHTimeout bounds a single ssh command executed inside the deployed app.
+	appSSHTimeout = 20 * time.Second
+
+	// extensionHealthTimeout bounds how long we wait for extsloader to report a
+	// Ready Extension after the device boots the split image.
+	extensionHealthTimeout = 5 * time.Minute
 )
 
-// upgradeToSplitImage drives an EVE base-OS update to a split (universal) image
-// and waits for the target to reach its terminal state. It returns the EVE short
-// version the device reports for the target image.
+// newOTATestDeviceConfig builds the device configuration shared by the
+// split-rootfs base-OS update tests: a shortened update test window, one
+// DHCP-managed Ethernet port used for both management and apps, a local network
+// instance, and one container app reachable over SSH through a port forward.
+//
+// The app is what proves the device is not degraded after a base-OS change: it
+// must survive the reboot and stay reachable, which exercises the hypervisor,
+// the container runtime and zedrouter on the newly booted image.
+//
+// It returns the config (not yet applied) and the UUID of the deployed app.
+func newOTATestDeviceConfig(devName string) (*evetest.EdgeDeviceConfig, uuid.UUID) {
+	devConfig := evetest.NewEdgeDeviceConfig(devName)
+
+	cfgProps := types.NewConfigItemValueMap()
+	cfgProps.SetGlobalValueInt(types.MintimeUpdateSuccess, uint32(updateTestWindow.Seconds()))
+	devConfig.SetConfigProperties(cfgProps)
+
+	networkUUID := devConfig.AddNetwork(evetest.DHCPNetworkConfig{
+		NetworkType: evecommon.NetworkType_V4,
+	})
+	devConfig.AddNetworkAdapter(evetest.NetworkAdapterConfig{
+		LogicalLabel:  "eth0",
+		PhysicalLabel: "eth0",
+		InterfaceName: "eth0",
+		NetworkUUID:   networkUUID,
+		Usage:         evecommon.PhyIoMemberUsage_PhyIoUsageMgmtAndApps,
+	})
+	niUUID := devConfig.AddNetworkInstance(evetest.LocalNetworkInstanceConfig{
+		DisplayName: "local-ni",
+		Port:        "eth0",
+		Subnet:      evetest.IPSubnet("10.11.12.0/24"),
+		DHCPRange: types.IPRange{
+			Start: evetest.IPAddress("10.11.12.2"),
+			End:   evetest.IPAddress("10.11.12.254"),
+		},
+		Gateway: evetest.IPAddress("10.11.12.1"),
+		MTU:     1500,
+	})
+	appUUID := devConfig.AddApplication(evetest.ApplicationInstanceConfig{
+		DisplayName: "splitrootfs-test-app",
+		Activate:    true,
+		Image: evetest.DockerContainer{
+			ImageName: "milan4zededa/evetest-ubuntu-ctr",
+			Tag:       "1.0",
+		},
+		VirtualizationMode: eveconfig.VmMode_HVM,
+		CPUs:               1,
+		MemoryBytes:        500 * evetest.MiB,
+		NetworkAdapters: []evetest.AppNetworkAdapter{
+			evetest.VirtualNetworkAdapter{
+				LogicalLabel:        "vif0",
+				NetworkInstanceUUID: niUUID,
+				PortFwdRules: []evetest.PortFwdRule{
+					{
+						Protocol:     evetest.NetworkProtocolTCP,
+						EdgeNodePort: appSSHFwdPort,
+						AppPort:      22,
+					},
+				},
+				ACLAllowRules: []evetest.ACLAllowRule{
+					{
+						Protocol:     evetest.NetworkProtocolAny,
+						RemoteSubnet: evetest.IPSubnet("0.0.0.0/0"),
+					},
+				},
+			},
+		},
+	})
+	return devConfig, appUUID
+}
+
+// assertAppReachable waits until the deployed app is running and answers over
+// SSH with its own UUID (the hostname the test image reports). phase names the
+// point in the test this is checked at, so a failure says which side of the
+// base-OS change broke.
+func assertAppReachable(t Gomega, device *evetest.EdgeDevice, appUUID uuid.UUID,
+	phase string) {
+	log := evetest.Logger()
+	log.Infof("Verifying app is running and reachable %s", phase)
+
+	device.WaitUntilAppIsRunning(appUUID, 5*time.Minute)
+	appAuth := evetest.UsernamePasswordAuth{
+		Username: appSSHUser,
+		Password: appSSHPassword,
+	}
+	t.Eventually(func(t Gomega) {
+		out, _, err := device.RunShellScriptInsideApp(
+			appUUID, appAuth, "hostname", appSSHTimeout, 0)
+		t.Expect(err).NotTo(HaveOccurred())
+		t.Expect(strings.TrimSpace(out)).To(Equal(appUUID.String()))
+	}, 3*time.Minute, 5*time.Second).Should(Succeed())
+}
+
+// updateBaseOS drives an EVE base-OS update and waits for the target to reach
+// its terminal state. It returns the EVE short version the device reports for
+// the target image.
+//
+// The wait is done here rather than by UpgradeEVE so that a stalled update dumps
+// Extension diagnostics instead of just timing out.
+// When expectRevert is true, the update is expected to be rejected and the
+// device to roll back to the previous version.
+func updateBaseOS(t Gomega, device *evetest.EdgeDevice,
+	targetVersion string, targetHypervisor evetest.Hypervisor,
+	expectRevert bool, delivery evetest.UpgradeDelivery) string {
+	log := evetest.Logger()
+	log.Infof("Updating base OS to %s (%s)", targetVersion, targetHypervisor)
+
+	shortVersion := device.UpgradeEVE(targetVersion, targetHypervisor,
+		false, expectRevert, evetest.WithUpgradeDelivery(delivery))
+	log.Infof("Target image reports EVE short version %q", shortVersion)
+
+	waitForBaseOSUpdate(t, device, shortVersion, expectRevert, baseOSUpdateTimeout)
+	return shortVersion
+}
+
+// upgradeToSplitImage drives an EVE base-OS update to a split (universal) image.
 //
 // The update goes through a registry datastore rather than the framework's
 // default HTTP rootfs delivery: flattening the image to a single rootfs.img keeps
 // only the Core, dropping the Extension (disk-0) layer, and never populates the
 // containerd content-addressable store (CAS) that baseosmgr extracts the
 // Extension from and extsloader self-heals it from.
-//
-// The wait is done here rather than by UpgradeEVE so that a stalled update dumps
-// Extension diagnostics instead of just timing out.
-// When expectRevert is true, the update is expected to be rejected and the
-// device to roll back to the previous version.
 func upgradeToSplitImage(t Gomega, device *evetest.EdgeDevice,
 	targetVersion string, targetHypervisor evetest.Hypervisor,
 	expectRevert bool) string {
-	log := evetest.Logger()
-	log.Infof("Updating base OS to split image %s (%s) via registry datastore",
-		targetVersion, targetHypervisor)
-
-	shortVersion := device.UpgradeEVE(targetVersion, targetHypervisor,
-		false, expectRevert,
-		evetest.WithUpgradeDelivery(evetest.UpgradeDeliveryOCIRegistry))
-	log.Infof("Target split image reports EVE short version %q", shortVersion)
-
-	waitForSplitBaseOS(t, device, shortVersion, expectRevert, splitUpgradeTimeout)
-	return shortVersion
+	return updateBaseOS(t, device, targetVersion, targetHypervisor, expectRevert,
+		evetest.UpgradeDeliveryOCIRegistry)
 }
 
-// waitForSplitBaseOS blocks until the device reaches the terminal state of a
-// split base-OS update, or fails the test on timeout.
+// waitForBaseOSUpdate blocks until the device reaches the terminal state of a
+// base-OS update, or fails the test on timeout.
 //
 // It mirrors the logic of the framework's private waitForUpgrade/waitForRevert,
 // but uses the public WatchDeviceInfo channel. It scans each device-info
@@ -84,7 +201,7 @@ func upgradeToSplitImage(t Gomega, device *evetest.EdgeDevice,
 //     fails immediately if it reports UserStatus==FAILED.
 //   - revert path: returns once that entry reports UserStatus==FAILED (the
 //     target was rejected and the device rolled back to the previous version).
-func waitForSplitBaseOS(t Gomega, device *evetest.EdgeDevice,
+func waitForBaseOSUpdate(t Gomega, device *evetest.EdgeDevice,
 	targetShortVersion string, expectRevert bool, timeout time.Duration) {
 	log := evetest.Logger()
 	updates, stop := device.WatchDeviceInfo()
@@ -109,22 +226,22 @@ func waitForSplitBaseOS(t Gomega, device *evetest.EdgeDevice,
 				partState := sw.GetPartitionState()
 				if expectRevert {
 					if status == eveinfo.BaseOsStatus_FAILED {
-						log.Infof("Device reverted from split image %s: %s",
+						log.Infof("Device reverted from image %s: %s",
 							targetShortVersion, sw.GetSubStatusStr())
 						return
 					}
 				} else {
 					t.Expect(status).NotTo(Equal(eveinfo.BaseOsStatus_FAILED),
-						"split base-OS update to %s failed: %s",
+						"base-OS update to %s failed: %s",
 						targetShortVersion, sw.GetSubStatusStr())
 					if partState == "active" {
-						log.Infof("Device booted split image %s on the active partition",
+						log.Infof("Device booted image %s on the active partition",
 							targetShortVersion)
 						return
 					}
 				}
 				if partState != lastState || status.String() != lastStatus {
-					log.Infof("Split base-OS update in progress (state=%s, status=%s)",
+					log.Infof("Base-OS update in progress (state=%s, status=%s)",
 						partState, status.String())
 					lastState, lastStatus = partState, status.String()
 				}
@@ -138,7 +255,7 @@ func waitForSplitBaseOS(t Gomega, device *evetest.EdgeDevice,
 			// Extension/vault state before failing.
 			logExtensionDiagnostics(device)
 			t.Expect(false).To(BeTrue(),
-				"timed out after %s waiting for device to %s split image %s "+
+				"timed out after %s waiting for device to %s image %s "+
 					"(last state=%s, status=%s)",
 				timeout, verb, targetShortVersion, lastState, lastStatus)
 			return
@@ -261,16 +378,30 @@ func assertExtensionHealthy(t Gomega, device *evetest.EdgeDevice, timeout time.D
 	healthy = true
 }
 
-// assertCoreExpectsExtension asserts that the running core rootfs is a split
-// image, i.e. it ships the ext-verity-roothash marker that tells the core to
-// expect and mount a separate Extension.
-func assertCoreExpectsExtension(t Gomega, device *evetest.EdgeDevice) {
+// coreImageKind reports whether the running core rootfs is a split image
+// ("split") or a monolithic one ("monolithic"), told apart by the
+// ext-verity-roothash marker that makes the core expect and mount a separate
+// Extension.
+func coreImageKind(t Gomega, device *evetest.EdgeDevice) string {
 	out, _, err := device.RunShellScript(
 		"test -f /hostfs/etc/ext-verity-roothash && echo split || echo monolithic",
 		shortSSHTimeout, 0)
 	t.Expect(err).NotTo(HaveOccurred())
-	t.Expect(strings.TrimSpace(out)).To(Equal("split"),
+	return strings.TrimSpace(out)
+}
+
+// assertCoreExpectsExtension asserts that the running core rootfs is a split
+// image.
+func assertCoreExpectsExtension(t Gomega, device *evetest.EdgeDevice) {
+	t.Expect(coreImageKind(t, device)).To(Equal("split"),
 		"running core does not expect an Extension (not a split image)")
+}
+
+// assertCoreIsMonolithic asserts that the running core rootfs is a monolithic
+// image, i.e. it carries every service itself and expects no Extension.
+func assertCoreIsMonolithic(t Gomega, device *evetest.EdgeDevice) {
+	t.Expect(coreImageKind(t, device)).To(Equal("monolithic"),
+		"running core expects an Extension (not a monolithic image)")
 }
 
 // assertExtensionSelfHealed asserts that the Extension image was recovered from

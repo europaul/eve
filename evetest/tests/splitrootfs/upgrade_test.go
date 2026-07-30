@@ -4,32 +4,19 @@
 package splitrootfs_test
 
 import (
-	"strings"
 	"testing"
-	"time"
 
 	// revive:disable:dot-imports
 	. "github.com/onsi/gomega"
 
-	eveconfig "github.com/lf-edge/eve-api/go/config"
-	"github.com/lf-edge/eve-api/go/evecommon"
 	"github.com/lf-edge/eve/evetest"
 	"github.com/lf-edge/eve/evetest/constants"
 	"github.com/lf-edge/eve/evetest/netmodels"
-	"github.com/lf-edge/eve/pkg/pillar/types"
 )
 
 const (
 	initialEVEVersionParamKey = "INITIAL_EVE_VERSION"
 	initialHypervisorParamKey = "INITIAL_HYPERVISOR"
-
-	appSSHUser     = "root"
-	appSSHPassword = "testpassword"
-	appSSHFwdPort  = 2222
-
-	// extensionHealthTimeout bounds how long we wait for extsloader to report a
-	// Ready Extension after the device boots the split image.
-	extensionHealthTimeout = 5 * time.Minute
 )
 
 // TestSplitUpgradeFromMonolith performs an end-to-end base-OS update from a
@@ -139,84 +126,13 @@ func TestSplitUpgradeFromMonolith(test *testing.T) {
 
 	// Apply initial device config: management adapter, a local network instance,
 	// and a container app reachable over SSH.
-	devConfig := evetest.NewEdgeDeviceConfig(devName)
-	cfgProps := types.NewConfigItemValueMap()
-	cfgProps.SetGlobalValueInt(types.MintimeUpdateSuccess, uint32(updateTestWindow.Seconds()))
-	devConfig.SetConfigProperties(cfgProps)
-	networkUUID := devConfig.AddNetwork(evetest.DHCPNetworkConfig{
-		NetworkType: evecommon.NetworkType_V4,
-	})
-	devConfig.AddNetworkAdapter(evetest.NetworkAdapterConfig{
-		LogicalLabel:  "eth0",
-		PhysicalLabel: "eth0",
-		InterfaceName: "eth0",
-		NetworkUUID:   networkUUID,
-		Usage:         evecommon.PhyIoMemberUsage_PhyIoUsageMgmtAndApps,
-	})
-	niUUID := devConfig.AddNetworkInstance(evetest.LocalNetworkInstanceConfig{
-		DisplayName: "local-ni",
-		Port:        "eth0",
-		Subnet:      evetest.IPSubnet("10.11.12.0/24"),
-		DHCPRange: types.IPRange{
-			Start: evetest.IPAddress("10.11.12.2"),
-			End:   evetest.IPAddress("10.11.12.254"),
-		},
-		Gateway: evetest.IPAddress("10.11.12.1"),
-		MTU:     1500,
-	})
-	appUUID := devConfig.AddApplication(evetest.ApplicationInstanceConfig{
-		DisplayName: "splitrootfs-test-app",
-		Activate:    true,
-		Image: evetest.DockerContainer{
-			ImageName: "milan4zededa/evetest-ubuntu-ctr",
-			Tag:       "1.0",
-		},
-		VirtualizationMode: eveconfig.VmMode_HVM,
-		CPUs:               1,
-		MemoryBytes:        500 * evetest.MiB,
-		NetworkAdapters: []evetest.AppNetworkAdapter{
-			evetest.VirtualNetworkAdapter{
-				LogicalLabel:        "vif0",
-				NetworkInstanceUUID: niUUID,
-				PortFwdRules: []evetest.PortFwdRule{
-					{
-						Protocol:     evetest.NetworkProtocolTCP,
-						EdgeNodePort: appSSHFwdPort,
-						AppPort:      22,
-					},
-				},
-				ACLAllowRules: []evetest.ACLAllowRule{
-					{
-						Protocol:     evetest.NetworkProtocolAny,
-						RemoteSubnet: evetest.IPSubnet("0.0.0.0/0"),
-					},
-				},
-			},
-		},
-	})
+	devConfig, appUUID := newOTATestDeviceConfig(devName)
 	device.ApplyConfig(devConfig, false, false)
 
-	device.WaitUntilAppIsRunning(appUUID, 5*time.Minute)
-
-	// Verify the app is reachable before the update.
-	appAuth := evetest.UsernamePasswordAuth{Username: appSSHUser, Password: appSSHPassword}
-	sshTimeout := 20 * time.Second
-	log := evetest.Logger()
-	log.Infof("Verifying app is reachable before the split update")
-	t.Eventually(func(t Gomega) {
-		out, _, err := device.RunShellScriptInsideApp(
-			appUUID, appAuth, "hostname", sshTimeout, 0)
-		t.Expect(err).NotTo(HaveOccurred())
-		t.Expect(strings.TrimSpace(out)).To(Equal(appUUID.String()))
-	}, 3*time.Minute, 5*time.Second).Should(Succeed())
+	assertAppReachable(t, device, appUUID, "before the split update")
 
 	// The device must currently be monolithic (no ext-verity-roothash marker).
-	monoOut, _, err := device.RunShellScript(
-		"test -f /hostfs/etc/ext-verity-roothash && echo split || echo monolithic",
-		shortSSHTimeout, 0)
-	t.Expect(err).NotTo(HaveOccurred())
-	t.Expect(strings.TrimSpace(monoOut)).To(Equal("monolithic"),
-		"device is expected to start on a monolithic EVE image")
+	assertCoreIsMonolithic(t, device)
 
 	evetest.Checkpoint("pre-upgrade")
 
@@ -234,14 +150,7 @@ func TestSplitUpgradeFromMonolith(test *testing.T) {
 
 	// Verify the app comes back up and is still reachable under the split image.
 	// A running workload also proves the device is not in degraded mode.
-	device.WaitUntilAppIsRunning(appUUID, 5*time.Minute)
-	log.Infof("Verifying app is reachable after the split update")
-	t.Eventually(func(t Gomega) {
-		out, _, err := device.RunShellScriptInsideApp(
-			appUUID, appAuth, "hostname", sshTimeout, 0)
-		t.Expect(err).NotTo(HaveOccurred())
-		t.Expect(strings.TrimSpace(out)).To(Equal(appUUID.String()))
-	}, 3*time.Minute, 5*time.Second).Should(Succeed())
+	assertAppReachable(t, device, appUUID, "after the split update")
 
 	evetest.Checkpoint("post-upgrade-verified")
 }
