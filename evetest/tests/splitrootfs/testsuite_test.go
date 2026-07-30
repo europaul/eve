@@ -19,11 +19,18 @@ import (
 //   - TestSplitRevertToMonolith: the same OTA followed by a controller-initiated
 //     revert back to the monolithic image.
 //
+// TestSplitBrokenExtensionRollback is deliberately NOT part of this suite. It
+// needs a purpose-built image with a corrupted ext-verity-roothash, which no
+// registry publishes; requiring it here would make the whole suite unrunnable
+// for anyone who has not built that artifact by hand. Run it on its own with
+// BROKEN_EVE_VERSION set. Once the broken image becomes a build artifact it
+// belongs in a "full" suite alongside the other scenarios that need extra
+// images, mirroring how Eden split split-rootfs.tests.txt from
+// split-rootfs-full.tests.txt.
+//
 // TODO: expand coverage with additional tests and variants as the split-rootfs
 // feature matures:
 //   - Split->split update (Extension already present, no self-heal expected).
-//   - Broken/corrupted Extension causing a rejected update and rollback
-//     (expectRevert=true).
 //   - Controller disconnect during Extension download/extraction.
 //   - PCR/measured-boot enforcement of the Extension roothash.
 //   - Additional hypervisor/filesystem variants: kubevirt, xen, and ZFS.

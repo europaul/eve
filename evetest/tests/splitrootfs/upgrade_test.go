@@ -66,7 +66,7 @@ const (
 //   - TPM: enable TPM emulation (default: true).
 //   - DISK_SIZE_MB: device disk size in MiB (0 = framework default).
 //   - INITIAL_EVE_VERSION: monolithic EVE version to start on (required; default
-//     "16.0.0-lts").
+//     "16.0.1-lts").
 //   - INITIAL_HYPERVISOR: hypervisor of the initial version (default: kvm).
 func TestSplitUpgradeFromMonolith(test *testing.T) {
 	evetestT := evetest.Init(test)
@@ -81,10 +81,10 @@ func TestSplitUpgradeFromMonolith(test *testing.T) {
 		evetest.DiskSizeMiBParameter(),
 		evetest.TestParameterDefinition{
 			Key:          initialEVEVersionParamKey,
-			DefaultValue: "16.0.0-lts",
+			DefaultValue: "16.0.1-lts",
 			Description: evetest.TestParameterDescription{
 				Summary: "Monolithic EVE version the device starts on before the split update",
-				Default: "16.0.0-lts",
+				Default: "16.0.1-lts",
 			},
 		},
 		evetest.TestParameterDefinition{
@@ -126,7 +126,7 @@ func TestSplitUpgradeFromMonolith(test *testing.T) {
 
 	// Apply initial device config: management adapter, a local network instance,
 	// and a container app reachable over SSH.
-	devConfig, appUUID := newOTATestDeviceConfig(devName)
+	devConfig, appUUID := newOTATestDeviceConfig(devName, updateTestWindow)
 	device.ApplyConfig(devConfig, false, false)
 
 	assertAppReachable(t, device, appUUID, "before the split update")

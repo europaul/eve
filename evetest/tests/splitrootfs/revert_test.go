@@ -18,7 +18,7 @@ import (
 // (single-rootfs) image. A monolithic image carries no Extension layer, so it is
 // delivered the ordinary way: flattened to a rootfs.img over HTTP.
 func revertToMonolithImage(t Gomega, device *evetest.EdgeDevice,
-	targetVersion string, targetHypervisor evetest.Hypervisor) string {
+	targetVersion string, targetHypervisor evetest.Hypervisor) (string, bool) {
 	return updateBaseOS(t, device, targetVersion, targetHypervisor, false,
 		evetest.UpgradeDeliveryHTTPRootfs)
 }
@@ -78,7 +78,7 @@ func revertToMonolithImage(t Gomega, device *evetest.EdgeDevice,
 //   - TPM: enable TPM emulation (default: true).
 //   - DISK_SIZE_MB: device disk size in MiB (0 = framework default).
 //   - INITIAL_EVE_VERSION: monolithic EVE version to start on and revert to
-//     (required; default "16.0.0-lts").
+//     (required; default "16.0.1-lts").
 //   - INITIAL_HYPERVISOR: hypervisor of the monolithic version (default: kvm).
 func TestSplitRevertToMonolith(test *testing.T) {
 	evetestT := evetest.Init(test)
@@ -93,10 +93,10 @@ func TestSplitRevertToMonolith(test *testing.T) {
 		evetest.DiskSizeMiBParameter(),
 		evetest.TestParameterDefinition{
 			Key:          initialEVEVersionParamKey,
-			DefaultValue: "16.0.0-lts",
+			DefaultValue: "16.0.1-lts",
 			Description: evetest.TestParameterDescription{
 				Summary: "Monolithic EVE version the device starts on and reverts back to",
-				Default: "16.0.0-lts",
+				Default: "16.0.1-lts",
 			},
 		},
 		evetest.TestParameterDefinition{
@@ -138,7 +138,7 @@ func TestSplitRevertToMonolith(test *testing.T) {
 
 	// Apply initial device config: management adapter, a local network instance,
 	// and a container app reachable over SSH.
-	devConfig, appUUID := newOTATestDeviceConfig(devName)
+	devConfig, appUUID := newOTATestDeviceConfig(devName, updateTestWindow)
 	device.ApplyConfig(devConfig, false, false)
 
 	assertAppReachable(t, device, appUUID, "before the split update")

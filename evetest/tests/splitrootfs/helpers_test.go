@@ -30,12 +30,17 @@ const (
 	// updateTestWindow is the value we set for timer.test.baseimage.update, the
 	// period nodeagent waits after booting the new partition before declaring
 	// the update successful. The default is 10 minutes, which dominates the
-	// runtime of these tests. It cannot be cut much further: on the first boot of
-	// the split image the Extension has to be self-healed out of the CAS, which
-	// itself waits for the vault to be unlocked with a controller-escrowed key,
-	// and nodeagent rolls the update back if extsloader is not Ready by the time
-	// the window expires.
+	// runtime of these tests. It cannot be cut much further for updates that are
+	// meant to SUCCEED: on the first boot of the split image the Extension has to
+	// be self-healed out of the CAS, which itself waits for the vault to be
+	// unlocked with a controller-escrowed key, and nodeagent rolls the update
+	// back if extsloader is not Ready by the time the window expires.
 	updateTestWindow = 5 * time.Minute
+
+	// failedUpdateTestWindow is used by tests whose update is meant to FAIL. There
+	// the window is pure waiting -- nodeagent rolls back once it expires -- so it
+	// is cut to the shortest value that still lets the Core boot and report in.
+	failedUpdateTestWindow = 2 * time.Minute
 
 	// shortSSHTimeout bounds a single quick shell command executed on the device.
 	shortSSHTimeout = 30 * time.Second
@@ -60,6 +65,22 @@ const (
 	// extensionHealthTimeout bounds how long we wait for extsloader to report a
 	// Ready Extension after the device boots the split image.
 	extensionHealthTimeout = 5 * time.Minute
+
+	// deviceReachableTimeout bounds how long we wait for the device to answer
+	// over SSH again after a reboot.
+	deviceReachableTimeout = 5 * time.Minute
+
+	// deviceReportingTimeout bounds how long we wait for the device to publish a
+	// fresh info message to the controller.
+	deviceReportingTimeout = 3 * time.Minute
+
+	// appReachableTimeout bounds how long we wait for the deployed app to answer
+	// over SSH. It is generous because after a reboot sshd is back long before
+	// pillar is: the device answers shell commands while domainmgr is still
+	// waiting for adapters and containerd, and the app cannot be re-created until
+	// that finishes. Eventually returns as soon as the app answers, so a high
+	// ceiling costs nothing when recovery is quick.
+	appReachableTimeout = 8 * time.Minute
 )
 
 // newOTATestDeviceConfig builds the device configuration shared by the
@@ -67,16 +88,20 @@ const (
 // DHCP-managed Ethernet port used for both management and apps, a local network
 // instance, and one container app reachable over SSH through a port forward.
 //
+// testWindow sets timer.test.baseimage.update; pass updateTestWindow for updates
+// expected to succeed and failedUpdateTestWindow for ones expected to roll back.
+//
 // The app is what proves the device is not degraded after a base-OS change: it
 // must survive the reboot and stay reachable, which exercises the hypervisor,
 // the container runtime and zedrouter on the newly booted image.
 //
 // It returns the config (not yet applied) and the UUID of the deployed app.
-func newOTATestDeviceConfig(devName string) (*evetest.EdgeDeviceConfig, uuid.UUID) {
+func newOTATestDeviceConfig(devName string,
+	testWindow time.Duration) (*evetest.EdgeDeviceConfig, uuid.UUID) {
 	devConfig := evetest.NewEdgeDeviceConfig(devName)
 
 	cfgProps := types.NewConfigItemValueMap()
-	cfgProps.SetGlobalValueInt(types.MintimeUpdateSuccess, uint32(updateTestWindow.Seconds()))
+	cfgProps.SetGlobalValueInt(types.MintimeUpdateSuccess, uint32(testWindow.Seconds()))
 	devConfig.SetConfigProperties(cfgProps)
 
 	networkUUID := devConfig.AddNetwork(evetest.DHCPNetworkConfig{
@@ -137,12 +162,16 @@ func newOTATestDeviceConfig(devName string) (*evetest.EdgeDeviceConfig, uuid.UUI
 // SSH with its own UUID (the hostname the test image reports). phase names the
 // point in the test this is checked at, so a failure says which side of the
 // base-OS change broke.
+//
+// The SSH probe, not WaitUntilAppIsRunning, is the real gate: the latter is
+// satisfied by any RUNNING record the controller has already stored, so after a
+// reboot it returns on the app's pre-reboot state and proves nothing about now.
 func assertAppReachable(t Gomega, device *evetest.EdgeDevice, appUUID uuid.UUID,
 	phase string) {
 	log := evetest.Logger()
 	log.Infof("Verifying app is running and reachable %s", phase)
 
-	device.WaitUntilAppIsRunning(appUUID, 5*time.Minute)
+	device.WaitUntilAppIsRunning(appUUID, appReachableTimeout)
 	appAuth := evetest.UsernamePasswordAuth{
 		Username: appSSHUser,
 		Password: appSSHPassword,
@@ -152,12 +181,12 @@ func assertAppReachable(t Gomega, device *evetest.EdgeDevice, appUUID uuid.UUID,
 			appUUID, appAuth, "hostname", appSSHTimeout, 0)
 		t.Expect(err).NotTo(HaveOccurred())
 		t.Expect(strings.TrimSpace(out)).To(Equal(appUUID.String()))
-	}, 3*time.Minute, 5*time.Second).Should(Succeed())
+	}, appReachableTimeout, 5*time.Second).Should(Succeed())
 }
 
 // updateBaseOS drives an EVE base-OS update and waits for the target to reach
 // its terminal state. It returns the EVE short version the device reports for
-// the target image.
+// the target image, and whether the device was ever seen running it.
 //
 // The wait is done here rather than by UpgradeEVE so that a stalled update dumps
 // Extension diagnostics instead of just timing out.
@@ -165,7 +194,7 @@ func assertAppReachable(t Gomega, device *evetest.EdgeDevice, appUUID uuid.UUID,
 // device to roll back to the previous version.
 func updateBaseOS(t Gomega, device *evetest.EdgeDevice,
 	targetVersion string, targetHypervisor evetest.Hypervisor,
-	expectRevert bool, delivery evetest.UpgradeDelivery) string {
+	expectRevert bool, delivery evetest.UpgradeDelivery) (string, bool) {
 	log := evetest.Logger()
 	log.Infof("Updating base OS to %s (%s)", targetVersion, targetHypervisor)
 
@@ -173,8 +202,9 @@ func updateBaseOS(t Gomega, device *evetest.EdgeDevice,
 		false, expectRevert, evetest.WithUpgradeDelivery(delivery))
 	log.Infof("Target image reports EVE short version %q", shortVersion)
 
-	waitForBaseOSUpdate(t, device, shortVersion, expectRevert, baseOSUpdateTimeout)
-	return shortVersion
+	booted := waitForBaseOSUpdate(t, device, shortVersion, expectRevert,
+		baseOSUpdateTimeout)
+	return shortVersion, booted
 }
 
 // upgradeToSplitImage drives an EVE base-OS update to a split (universal) image.
@@ -186,7 +216,7 @@ func updateBaseOS(t Gomega, device *evetest.EdgeDevice,
 // Extension from and extsloader self-heals it from.
 func upgradeToSplitImage(t Gomega, device *evetest.EdgeDevice,
 	targetVersion string, targetHypervisor evetest.Hypervisor,
-	expectRevert bool) string {
+	expectRevert bool) (string, bool) {
 	return updateBaseOS(t, device, targetVersion, targetHypervisor, expectRevert,
 		evetest.UpgradeDeliveryOCIRegistry)
 }
@@ -201,14 +231,20 @@ func upgradeToSplitImage(t Gomega, device *evetest.EdgeDevice,
 //     fails immediately if it reports UserStatus==FAILED.
 //   - revert path: returns once that entry reports UserStatus==FAILED (the
 //     target was rejected and the device rolled back to the previous version).
+//
+// It returns whether the target was ever observed in PartitionState "inprogress",
+// i.e. whether the device actually booted it. On the revert path that is the
+// difference between "the image booted and was then rejected" and "the image
+// never got far enough to run", which are very different failures.
 func waitForBaseOSUpdate(t Gomega, device *evetest.EdgeDevice,
-	targetShortVersion string, expectRevert bool, timeout time.Duration) {
+	targetShortVersion string, expectRevert bool, timeout time.Duration) bool {
 	log := evetest.Logger()
 	updates, stop := device.WatchDeviceInfo()
 	defer stop()
 
 	deadline := time.After(timeout)
 	var lastState, lastStatus string
+	var sawInProgress bool
 	for {
 		select {
 		case info, ok := <-updates:
@@ -216,7 +252,7 @@ func waitForBaseOSUpdate(t Gomega, device *evetest.EdgeDevice,
 				t.Expect(ok).To(BeTrue(),
 					"device-info watch closed unexpectedly while waiting for %s",
 					targetShortVersion)
-				return
+				return sawInProgress
 			}
 			for _, sw := range info.GetSwList() {
 				if sw.GetShortVersion() != targetShortVersion {
@@ -224,11 +260,14 @@ func waitForBaseOSUpdate(t Gomega, device *evetest.EdgeDevice,
 				}
 				status := sw.GetUserStatus()
 				partState := sw.GetPartitionState()
+				if partState == "inprogress" {
+					sawInProgress = true
+				}
 				if expectRevert {
 					if status == eveinfo.BaseOsStatus_FAILED {
 						log.Infof("Device reverted from image %s: %s",
 							targetShortVersion, sw.GetSubStatusStr())
-						return
+						return sawInProgress
 					}
 				} else {
 					t.Expect(status).NotTo(Equal(eveinfo.BaseOsStatus_FAILED),
@@ -237,7 +276,7 @@ func waitForBaseOSUpdate(t Gomega, device *evetest.EdgeDevice,
 					if partState == "active" {
 						log.Infof("Device booted image %s on the active partition",
 							targetShortVersion)
-						return
+						return sawInProgress
 					}
 				}
 				if partState != lastState || status.String() != lastStatus {
@@ -258,7 +297,7 @@ func waitForBaseOSUpdate(t Gomega, device *evetest.EdgeDevice,
 				"timed out after %s waiting for device to %s image %s "+
 					"(last state=%s, status=%s)",
 				timeout, verb, targetShortVersion, lastState, lastStatus)
-			return
+			return sawInProgress
 		}
 	}
 }
@@ -376,6 +415,51 @@ func assertExtensionHealthy(t Gomega, device *evetest.EdgeDevice, timeout time.D
 	}, timeout, 10*time.Second).Should(Succeed())
 
 	healthy = true
+}
+
+// waitForDeviceReachable blocks until the device answers a trivial shell command.
+//
+// A rejected base-OS update ends with a reboot back onto the previous partition,
+// but the signal the test waits on -- the target image reporting FAILED -- is
+// published while that reboot is still ahead. Anything probing the device over
+// SSH straight afterwards races the reboot and fails with "no reachable
+// endpoint", so the rollback paths have to wait for the device to come back
+// first.
+func waitForDeviceReachable(t Gomega, device *evetest.EdgeDevice,
+	timeout time.Duration) {
+	evetest.Logger().Infof("Waiting for the device to become reachable again")
+	t.Eventually(func(g Gomega) {
+		out, _, err := device.RunShellScript("echo alive", shortSSHTimeout, 0)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(strings.TrimSpace(out)).To(Equal("alive"))
+	}, timeout, 10*time.Second).Should(Succeed())
+}
+
+// assertDeviceStillReporting waits for a fresh device-info message, proving the
+// device is still talking to the controller.
+//
+// This is deliberately read-only. The obvious alternative -- pushing a config
+// and waiting for it to be confirmed -- would also work, but after a rejected
+// base-OS update the config the test holds no longer requests the failed image,
+// so applying it would withdraw that image as a side effect and change the very
+// situation under test. WatchDeviceInfo delivers only messages published after
+// the watch starts, so receiving one proves current liveness rather than
+// replaying history.
+func assertDeviceStillReporting(t Gomega, device *evetest.EdgeDevice,
+	timeout time.Duration) {
+	evetest.Logger().Infof("Verifying the device still reports to the controller")
+	updates, stop := device.WatchDeviceInfo()
+	defer stop()
+
+	select {
+	case info, ok := <-updates:
+		t.Expect(ok).To(BeTrue(), "device-info watch closed unexpectedly")
+		t.Expect(info).NotTo(BeNil(), "device published an empty info message")
+	case <-time.After(timeout):
+		t.Expect(false).To(BeTrue(),
+			"device published no info within %s, so it is no longer manageable",
+			timeout)
+	}
 }
 
 // coreImageKind reports whether the running core rootfs is a split image
