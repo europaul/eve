@@ -16,6 +16,8 @@ import (
 //     boots healthy (Extension verity-mounted, extsloader Ready).
 //   - TestSplitUpgradeFromMonolith: OTA from a monolithic image to a split image
 //     (Extension CAS-self-healed). Requires SPLIT_IMAGE_TAG.
+//   - TestSplitRevertToMonolith: the same OTA followed by a controller-initiated
+//     revert back to the monolithic image.
 //
 // TODO: expand coverage with additional tests and variants as the split-rootfs
 // feature matures:
@@ -51,6 +53,18 @@ func TestSplitRootfsSuite(test *testing.T) {
 			Variants: []evetest.TestVariant{
 				{
 					Name: "MonolithToSplitKVM",
+					Parameters: []evetest.TestParameterValue{
+						{Key: initialHypervisorParamKey, Value: evetest.HypervisorKVM},
+						{Key: evetest.HypervisorParameterKey, Value: evetest.HypervisorKVM},
+					},
+				},
+			},
+		},
+		evetest.TestCase{
+			Test: TestSplitRevertToMonolith,
+			Variants: []evetest.TestVariant{
+				{
+					Name: "RevertToMonolithKVM",
 					Parameters: []evetest.TestParameterValue{
 						{Key: initialHypervisorParamKey, Value: evetest.HypervisorKVM},
 						{Key: evetest.HypervisorParameterKey, Value: evetest.HypervisorKVM},
