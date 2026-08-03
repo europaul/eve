@@ -84,8 +84,10 @@ const (
 //   - BROKEN_EVE_VERSION: version of the split image with the corrupted
 //     ext-verity-roothash (required). Build it with
 //     tests/eden/prepare-broken-split-image.sh, which flips one hex character of
-//     the root hash and repackages the Core. It must carry a version distinct
-//     from any good split image used elsewhere in the suite.
+//     the root hash and repackages the Core under its own version, leaving the
+//     good image and its tags untouched. Pass GOOD_VERSION=<existing build> to
+//     reuse a split build instead of rebuilding from scratch, and HV_TAG=kvm so
+//     the image is also published under the tag this test resolves.
 //   - HYPERVISOR: hypervisor the broken image is fetched for (default: kvm).
 //   - TPM: enable TPM emulation (default: true).
 //   - DISK_SIZE_MB: device disk size in MiB (0 = framework default).
