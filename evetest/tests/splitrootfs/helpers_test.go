@@ -506,6 +506,31 @@ func assertCoreIsMonolithic(t Gomega, device *evetest.EdgeDevice) {
 // records how the Extension was obtained, making provenance explicit rather
 // than inferred.
 func assertExtensionSelfHealed(t Gomega, device *evetest.EdgeDevice) {
+	provenance, detail := extensionProvenance(t, device)
+	t.Expect(provenance).To(Equal("self-healed"),
+		"Extension predates this boot, so it was not self-healed from the CAS (%s)",
+		detail)
+}
+
+// assertExtensionPreExtracted asserts the opposite of assertExtensionSelfHealed:
+// the Extension was written by baseosmgr on the previous boot, before the reboot
+// into the new image, so no CAS self-heal was needed.
+//
+// This is what a split-to-split update must do. The previous EVE is itself a
+// split image, so its baseosmgr can extract the incoming Extension for the
+// target slot ahead of the reboot -- unlike a monolithic predecessor, which
+// cannot, leaving extsloader to self-heal from the CAS on first boot.
+func assertExtensionPreExtracted(t Gomega, device *evetest.EdgeDevice) {
+	provenance, detail := extensionProvenance(t, device)
+	t.Expect(provenance).To(Equal("pre-existing"),
+		"Extension postdates this boot, so it was self-healed from the CAS "+
+			"rather than pre-extracted by baseosmgr (%s)", detail)
+}
+
+// extensionProvenance reports how the Extension extsloader loaded came to be,
+// as "self-healed" (created after this boot) or "pre-existing" (created before
+// it), along with the raw boot/mtime detail for failure messages.
+func extensionProvenance(t Gomega, device *evetest.EdgeDevice) (string, string) {
 	status := readExtsloaderStatus(t, device)
 	t.Expect(status.ImagePath).NotTo(BeEmpty(),
 		"extsloader published no Extension image path")
@@ -518,7 +543,11 @@ func assertExtensionSelfHealed(t Gomega, device *evetest.EdgeDevice) {
 			`[ "$mtime" -gt "$boot" ] && echo self-healed || echo pre-existing`,
 		shortSSHTimeout, 0)
 	t.Expect(err).NotTo(HaveOccurred())
-	t.Expect(out).To(ContainSubstring("self-healed"),
-		"Extension %s predates this boot, so it was not self-healed from the CAS (%s)",
-		status.ImagePath, strings.TrimSpace(out))
+
+	detail := strings.TrimSpace(out)
+	evetest.Logger().Infof("Extension %s provenance: %s", status.ImagePath, detail)
+	if strings.Contains(out, "self-healed") {
+		return "self-healed", detail
+	}
+	return "pre-existing", detail
 }
