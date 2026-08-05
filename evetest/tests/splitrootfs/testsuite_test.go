@@ -19,14 +19,19 @@ import (
 //   - TestSplitRevertToMonolith: the same OTA followed by a controller-initiated
 //     revert back to the monolithic image.
 //
-// Two tests are deliberately NOT part of this suite, because each needs a
+// Four tests are deliberately NOT part of this suite, because each needs a
 // purpose-built image that no registry publishes; requiring them here would make
 // the whole suite unrunnable for anyone who has not built those artifacts by
 // hand. Run them on their own:
-//   - TestSplitBrokenExtensionRollback, with BROKEN_EVE_VERSION set, against an
-//     image from tests/eden/prepare-broken-split-image.sh.
-//   - TestSplitUpdateSplitToSplit, with INITIAL_EVE_VERSION and EVE_VERSION set
-//     to two split versions, the second from tests/eden/prepare-split-v2-image.sh.
+//
+//   - TestSplitBrokenExtensionRollback and
+//     TestSplitBrokenExtensionRollbackFromSplit, with BROKEN_EVE_VERSION set to
+//     an image from tests/eden/prepare-broken-split-image.sh. The first rolls
+//     back to a monolith, the second to the previous split version.
+//   - TestSplitUpdateSplitToSplit and TestSplitRevertToSplit, with
+//     INITIAL_EVE_VERSION and EVE_VERSION set to two split versions, the second
+//     from tests/eden/prepare-split-v2-image.sh (whose Extension carries the
+//     version marker the A/B pairing assertions rely on).
 //
 // Once those images become build artifacts they belong in a "full" suite
 // alongside the other scenarios that need extra images, mirroring how Eden split

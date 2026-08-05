@@ -179,3 +179,159 @@ func TestSplitRevertToMonolith(test *testing.T) {
 
 	evetest.Checkpoint("revert-verified")
 }
+
+// TestSplitRevertToSplit updates a device from one split (universal) EVE image
+// to a second one and then reverts it to the first, verifying the Extension
+// follows the active partition in both directions.
+//
+// Objective:
+//
+//	This is the rollback an operator actually performs once a fleet is on split
+//	images: not back to a monolith, but to the previous split version. It has a
+//	property the monolith revert cannot test -- the device holds an Extension
+//	per partition slot, so reverting must re-mount the FIRST slot's Extension
+//	and drop the second one's.
+//
+//	That is only observable because the two images carry different Extensions.
+//	tests/eden/prepare-split-v2-image.sh bakes a version marker into v2's
+//	Extension and v1 (a stock build) has none, so the marker is absent, then
+//	present naming v2, then absent again. A device that kept the v2 Extension
+//	mounted after reverting, or never swapped it in the first place, cannot
+//	produce that sequence.
+//
+//	As with the monolith revert this is controller-initiated -- the controller
+//	points the base OS back at the earlier image -- not the automatic rollback
+//	nodeagent performs when an update fails its test window.
+//
+// Network model:
+//
+//	SingleEthWithDHCP -- enough to reach the controller and the registry both
+//	split images are pulled from, and to give the app an IP for SSH checks.
+//
+// Device configuration:
+//
+//	One DHCP network on eth0 (mgmt + apps), one local network instance, and one
+//	Ubuntu container app reachable over SSH, to show workloads survive both legs.
+//
+// Phases:
+//  1. Install split v1, deploy the app, verify it is split and healthy and that
+//     no Extension marker is present (checkpoint "v1-installed").
+//  2. Update to split v2 and assert the mounted Extension is now v2's
+//     (checkpoint "v2-active").
+//  3. Revert the base OS to v1 and wait until it boots active
+//     (checkpoint "reverted").
+//  4. Assert the device is split and healthy, the mounted Extension is v1's
+//     again (marker gone), exactly one ext image remains, and the app and
+//     manageability survived (checkpoint "revert-verified").
+//
+// Parameters:
+//   - INITIAL_EVE_VERSION: the split version to install first and revert to
+//     (v1, required).
+//   - EVE_VERSION: the split version to update to (v2, required). Build it with
+//     tests/eden/prepare-split-v2-image.sh so its Extension carries the marker
+//     the pairing assertions rely on.
+//   - HYPERVISOR: hypervisor both images run as (default: kvm).
+//   - TPM: enable TPM emulation (default: true).
+//   - DISK_SIZE_MB: device disk size in MiB (0 = framework default).
+func TestSplitRevertToSplit(test *testing.T) {
+	evetestT := evetest.Init(test)
+	t := NewGomegaWithT(evetestT)
+	defer evetest.Close()
+
+	// Define configurable parameters available for the test.
+	evetest.DefineTestParameters(
+		evetest.EVEVersionParameter(),
+		evetest.HypervisorParameter(),
+		evetest.TPMParameter(),
+		evetest.DiskSizeMiBParameter(),
+		evetest.TestParameterDefinition{
+			Key: initialEVEVersionParamKey,
+			Description: evetest.TestParameterDescription{
+				Summary: "Split (universal) EVE version to install first and revert to (v1)",
+			},
+		},
+	)
+
+	// Get parameter values set for this test execution.
+	withTPM := evetest.GetTPMParameterValue()
+	diskSizeMiB := evetest.GetDiskSizeMiBParameterValue()
+	hypervisor := evetest.GetHypervisorParameterValue()
+	v2Version := evetest.GetEVEVersionParameterValue()
+	v1Version := evetest.GetTestParameter[string](initialEVEVersionParamKey)
+	if v1Version == "" {
+		evetestT.Fatalf("%s%s is required for TestSplitRevertToSplit",
+			constants.EnvPrefix, initialEVEVersionParamKey)
+	}
+	if v1Version == v2Version {
+		evetestT.Fatalf("v1 and v2 must differ, both are %q", v1Version)
+	}
+
+	const devName = "edge-dev"
+	evetest.Setup(
+		evetest.RequireEdgeDevice{
+			Name:              devName,
+			WithEVEVersion:    v1Version,
+			WithHypervisor:    hypervisor,
+			WithTPM:           withTPM,
+			MinDiskSizeInMiB:  diskSizeMiB,
+			DeviceReusePolicy: evetest.CreateFromScratchWithInstaller,
+		},
+		evetest.RequireNetworkModel{NetworkModel: netmodels.SingleEthWithDHCP},
+	)
+	device := evetest.GetEdgeDevice(devName)
+
+	devConfig, appUUID := newOTATestDeviceConfig(devName, updateTestWindow)
+	device.ApplyConfig(devConfig, false, false)
+
+	assertAppReachable(t, device, appUUID, "before the split-to-split update")
+	assertCoreExpectsExtension(t, device)
+	assertExtensionHealthy(t, device, extensionHealthTimeout)
+
+	// v1 is a stock build, so its Extension carries no marker. Recording this
+	// makes the absent/present/absent sequence below meaningful rather than
+	// vacuous: if v1 unexpectedly had a marker, the later assertions would be
+	// comparing the wrong things.
+	v1Marker := extMarker(t, device)
+	t.Expect(v1Marker).To(BeEmpty(),
+		"v1's Extension unexpectedly carries a version marker (%q); this test "+
+			"distinguishes the two slots' Extensions by v1 having none", v1Marker)
+
+	evetest.Checkpoint("v1-installed")
+
+	// Leg 1: v1 -> v2. Covered in depth by TestSplitUpdateSplitToSplit; here it
+	// only has to get the device onto v2 so there is something to revert from.
+	v2ShortVersion, _ := upgradeToSplitImage(t, device, v2Version, hypervisor, false)
+	assertCoreExpectsExtension(t, device)
+	assertExtensionHealthy(t, device, extensionHealthTimeout)
+	t.Expect(extMarker(t, device)).To(Equal(v2ShortVersion),
+		"the update to v2 did not swap in v2's Extension, so the revert below "+
+			"would not be testing anything")
+
+	evetest.Checkpoint("v2-active")
+
+	// Leg 2: v2 -> v1. The controller points the base OS back at the first split
+	// image; nodeagent must accept it and boot it active.
+	upgradeToSplitImage(t, device, v1Version, hypervisor, false)
+
+	evetest.Checkpoint("reverted")
+
+	// Still split, and healthy on the reverted slot.
+	assertCoreExpectsExtension(t, device)
+	assertExtensionHealthy(t, device, extensionHealthTimeout)
+
+	// The Extension must have followed the active partition back: v1's has no
+	// marker, so a marker still naming v2 would mean the wrong slot's Extension
+	// is mounted.
+	revertedMarker := extMarker(t, device)
+	t.Expect(revertedMarker).To(BeEmpty(),
+		"after reverting to v1 the mounted Extension still reports %q, so the "+
+			"Extension did not follow the active partition", revertedMarker)
+
+	// Only the reverted slot's Extension should remain.
+	assertExtImageCount(t, device, 1, extCleanupTimeout)
+
+	assertAppReachable(t, device, appUUID, "after the revert to v1")
+	assertDeviceStillReporting(t, device, deviceReportingTimeout)
+
+	evetest.Checkpoint("revert-verified")
+}
