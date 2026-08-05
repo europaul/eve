@@ -6,7 +6,6 @@ package splitrootfs_test
 import (
 	"strings"
 	"testing"
-	"time"
 
 	// revive:disable:dot-imports
 	. "github.com/onsi/gomega"
@@ -17,14 +16,6 @@ import (
 )
 
 const (
-	// extMarkerFile is the version marker baked into the Extension of a v2 test
-	// image by tests/eden/prepare-split-v2-image.sh, read through the mount.
-	extMarkerFile = "/persist/exts/etc/eve-ext-release"
-
-	// extCleanupTimeout bounds how long we allow baseosmgr to remove the Extension
-	// image of the slot that is no longer in use.
-	extCleanupTimeout = 3 * time.Minute
-
 	// efiHVTypeVar is the EFI variable onboot.sh writes on first boot so that
 	// later boots of a universal image can recover the hypervisor flavour, since
 	// by then both partitions are stamped "uni".
@@ -149,12 +140,8 @@ func TestSplitUpdateSplitToSplit(test *testing.T) {
 	// Record which Extension v1 has mounted, purely for the failure story if the
 	// update does not swap it. v1 is an ordinary build and need not carry the
 	// marker, so this is logged rather than asserted.
-	if out, _, err := device.RunShellScript(
-		"cat "+extMarkerFile+" 2>/dev/null || echo '(no marker)'",
-		shortSSHTimeout, 0); err == nil {
-		evetest.Logger().Infof("Extension marker before the update: %s",
-			strings.TrimSpace(out))
-	}
+	evetest.Logger().Infof("Extension marker before the update: %q",
+		extMarker(t, device))
 
 	evetest.Checkpoint("v1-installed")
 
@@ -174,24 +161,16 @@ func TestSplitUpdateSplitToSplit(test *testing.T) {
 	// The mounted Extension must be the one paired with the newly activated
 	// partition, i.e. v2's. This is the assertion the differing Extensions exist
 	// to make possible.
-	markerOut, _, err := device.RunShellScript(
-		"cat "+extMarkerFile+" 2>/dev/null || echo '(missing)'", shortSSHTimeout, 0)
-	t.Expect(err).NotTo(HaveOccurred())
-	t.Expect(strings.TrimSpace(markerOut)).To(Equal(v2ShortVersion),
+	marker := extMarker(t, device)
+	t.Expect(marker).To(Equal(v2ShortVersion),
 		"the Extension mounted at /persist/exts reports %q but the device is "+
 			"running %q, so the wrong slot's Extension is mounted (or v2 was not "+
 			"built with tests/eden/prepare-split-v2-image.sh, which adds the marker)",
-		strings.TrimSpace(markerOut), v2ShortVersion)
+		marker, v2ShortVersion)
 
 	// After a successful activation baseosmgr drops the now-unused slot's
 	// Extension, so /persist must be left holding exactly one.
-	t.Eventually(func(g Gomega) {
-		out, _, err := device.RunShellScript(
-			"ls /persist/ext-img*.img 2>/dev/null | wc -l", shortSSHTimeout, 0)
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(strings.TrimSpace(out)).To(Equal("1"),
-			"expected exactly one Extension image on /persist after activation")
-	}, extCleanupTimeout, 10*time.Second).Should(Succeed())
+	assertExtImageCount(t, device, 1, extCleanupTimeout)
 
 	// On a second OTA both partitions are stamped "uni", so GRUB cannot infer the
 	// hypervisor from the image alone -- it has to recover it from the EFI

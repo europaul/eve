@@ -5,6 +5,7 @@ package splitrootfs_test
 
 import (
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -73,6 +74,15 @@ const (
 	// deviceReportingTimeout bounds how long we wait for the device to publish a
 	// fresh info message to the controller.
 	deviceReportingTimeout = 3 * time.Minute
+
+	// extCleanupTimeout bounds how long we allow baseosmgr to remove the
+	// Extension image of a slot that is no longer in use.
+	extCleanupTimeout = 3 * time.Minute
+
+	// extMarkerFile is the version marker baked into the Extension of a second
+	// split image by tests/eden/prepare-split-v2-image.sh, read back through the
+	// mount. Stock images do not carry it.
+	extMarkerFile = "/persist/exts/etc/eve-ext-release"
 
 	// appReachableTimeout bounds how long we wait for the deployed app to answer
 	// over SSH. It is generous because after a reboot sshd is back long before
@@ -433,6 +443,37 @@ func waitForDeviceReachable(t Gomega, device *evetest.EdgeDevice,
 		g.Expect(err).NotTo(HaveOccurred())
 		g.Expect(strings.TrimSpace(out)).To(Equal("alive"))
 	}, timeout, 10*time.Second).Should(Succeed())
+}
+
+// assertExtImageCount asserts how many Extension images /persist is left
+// holding, once baseosmgr has had time to clean up.
+//
+// The expected count is scenario-specific and worth stating at each call site:
+// after activating one split image over another, the unused slot's copy is
+// dropped and exactly one remains; after rolling back to a monolithic image,
+// which pairs with no Extension at all, none should.
+func assertExtImageCount(t Gomega, device *evetest.EdgeDevice, want int,
+	timeout time.Duration) {
+	t.Eventually(func(g Gomega) {
+		out, _, err := device.RunShellScript(
+			"ls /persist/ext-img*.img 2>/dev/null | wc -l", shortSSHTimeout, 0)
+		g.Expect(err).NotTo(HaveOccurred())
+		g.Expect(strings.TrimSpace(out)).To(Equal(strconv.Itoa(want)),
+			"expected %d Extension image(s) on /persist", want)
+	}, timeout, 10*time.Second).Should(Succeed())
+}
+
+// extMarker returns the version marker of the Extension currently mounted, read
+// through the mount, or "" when the mounted Extension carries none.
+//
+// This is what makes the A/B pairing observable: the marker must name the
+// version now running, so it changes as the active slot changes, and is absent
+// when the active slot's Extension is a stock build.
+func extMarker(t Gomega, device *evetest.EdgeDevice) string {
+	out, _, err := device.RunShellScript(
+		"cat "+extMarkerFile+" 2>/dev/null || true", shortSSHTimeout, 0)
+	t.Expect(err).NotTo(HaveOccurred())
+	return strings.TrimSpace(out)
 }
 
 // assertDeviceStillReporting waits for a fresh device-info message, proving the
