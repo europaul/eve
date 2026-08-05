@@ -4,9 +4,7 @@
 package splitrootfs_test
 
 import (
-	"strings"
 	"testing"
-	"time"
 
 	// revive:disable:dot-imports
 	. "github.com/onsi/gomega"
@@ -18,10 +16,6 @@ import (
 
 const (
 	brokenEVEVersionParamKey = "BROKEN_EVE_VERSION"
-
-	// extensionCleanupTimeout bounds how long we allow for the Extension image of
-	// the rejected partition to disappear from /persist after the rollback.
-	extensionCleanupTimeout = 2 * time.Minute
 )
 
 // TestSplitBrokenExtensionRollback updates a device to a split image whose
@@ -193,13 +187,9 @@ func TestSplitBrokenExtensionRollback(test *testing.T) {
 
 	// nodeagent cleans the rejected partition's Extension image before rebooting
 	// back, so /persist must not be left carrying it.
-	t.Eventually(func(g Gomega) {
-		out, _, err := device.RunShellScript(
-			"ls /persist/ext-img*.img 2>/dev/null | wc -l", shortSSHTimeout, 0)
-		g.Expect(err).NotTo(HaveOccurred())
-		g.Expect(strings.TrimSpace(out)).To(Equal("0"),
-			"Extension image of the rejected partition was left on /persist")
-	}, extensionCleanupTimeout, 10*time.Second).Should(Succeed())
+	// Rolling back to a monolithic image, which pairs with no Extension at all,
+	// must leave none behind.
+	assertExtImageCount(t, device, 0, extCleanupTimeout)
 
 	// The controller is deliberately left still requesting the broken image --
 	// the state BASEIMAGE-UPDATE.md describes, where the device "will refuse to
@@ -209,6 +199,159 @@ func TestSplitBrokenExtensionRollback(test *testing.T) {
 	// must run its workloads and stay manageable while the failed image is still
 	// requested.
 	assertAppReachable(t, device, appUUID, "after the rollback")
+	assertDeviceStillReporting(t, device, deviceReportingTimeout)
+
+	evetest.Checkpoint("rollback-verified")
+}
+
+// TestSplitBrokenExtensionRollbackFromSplit updates a device that is already
+// running a split image to a split image whose Extension cannot be verified, and
+// verifies it rolls back onto its previous split version.
+//
+// Objective:
+//
+//	TestSplitBrokenExtensionRollback covers the same refusal starting from a
+//	monolith. This covers it from a split image, which is the state a fleet is
+//	actually in once migrated, and it differs in what a correct recovery looks
+//	like.
+//
+//	Rolling back to a monolith leaves no Extension behind at all. Rolling back
+//	to a split image must leave exactly ONE -- the surviving slot's -- so the
+//	device comes back with a working, verity-mounted Extension rather than
+//	merely a working Core. A device that discarded both, or kept the rejected
+//	slot's, would be broken in a way the monolith variant cannot detect.
+//
+//	As in the monolith variant, the broken image must be seen RUNNING first
+//	(PartitionState "inprogress"), or the rollback proves nothing about
+//	dm-verity; and nothing withdraws the broken image from the controller, so
+//	the recovery assertions hold while it is still being requested.
+//
+// Network model:
+//
+//	SingleEthWithDHCP -- enough to reach the controller and the registry the
+//	split images are pulled from, and to give the app an IP for SSH checks.
+//
+// Device configuration:
+//
+//	One DHCP network on eth0 (mgmt + apps), one local network instance, and one
+//	Ubuntu container app reachable over SSH. The test window is shortened to
+//	failedUpdateTestWindow: this update is meant to fail, so the window is pure
+//	waiting.
+//
+// Phases:
+//  1. Install split v1, deploy the app, verify it is split and healthy
+//     (checkpoint "split-installed").
+//  2. Update to the broken split image and wait for the device to roll back off
+//     it (checkpoint "rolled-back").
+//  3. Assert the broken image did boot before being rejected.
+//  4. Assert the device is back on a healthy split image with exactly one
+//     Extension image left, and the app and manageability survived
+//     (checkpoint "rollback-verified").
+//
+// Parameters:
+//   - INITIAL_EVE_VERSION: the split version to install first and roll back to
+//     (required).
+//   - BROKEN_EVE_VERSION: split version with a corrupted ext-verity-roothash
+//     (required). tests/eden/prepare-broken-split-image.sh with
+//     GOOD_VERSION=<the initial version> produces exactly this: the same build
+//     under its own version, with only the root hash corrupted.
+//   - HYPERVISOR: hypervisor both images run as (default: kvm).
+//   - TPM: enable TPM emulation (default: true).
+//   - DISK_SIZE_MB: device disk size in MiB (0 = framework default).
+func TestSplitBrokenExtensionRollbackFromSplit(test *testing.T) {
+	evetestT := evetest.Init(test)
+	t := NewGomegaWithT(evetestT)
+	defer evetest.Close()
+
+	// Define configurable parameters available for the test.
+	evetest.DefineTestParameters(
+		evetest.HypervisorParameter(),
+		evetest.TPMParameter(),
+		evetest.DiskSizeMiBParameter(),
+		evetest.TestParameterDefinition{
+			Key: brokenEVEVersionParamKey,
+			Description: evetest.TestParameterDescription{
+				Summary: "Split EVE version with a corrupted ext-verity-roothash " +
+					"(see tests/eden/prepare-broken-split-image.sh)",
+			},
+		},
+		evetest.TestParameterDefinition{
+			Key: initialEVEVersionParamKey,
+			Description: evetest.TestParameterDescription{
+				Summary: "Split (universal) EVE version to install first and roll back to",
+			},
+		},
+	)
+
+	// Get parameter values set for this test execution.
+	withTPM := evetest.GetTPMParameterValue()
+	diskSizeMiB := evetest.GetDiskSizeMiBParameterValue()
+	hypervisor := evetest.GetHypervisorParameterValue()
+	brokenVersion := evetest.GetTestParameter[string](brokenEVEVersionParamKey)
+	if brokenVersion == "" {
+		evetestT.Fatalf("%s%s is required for TestSplitBrokenExtensionRollbackFromSplit",
+			constants.EnvPrefix, brokenEVEVersionParamKey)
+	}
+	splitVersion := evetest.GetTestParameter[string](initialEVEVersionParamKey)
+	if splitVersion == "" {
+		evetestT.Fatalf("%s%s is required for TestSplitBrokenExtensionRollbackFromSplit",
+			constants.EnvPrefix, initialEVEVersionParamKey)
+	}
+	if splitVersion == brokenVersion {
+		evetestT.Fatalf("the initial and broken versions must differ, both are %q",
+			splitVersion)
+	}
+
+	const devName = "edge-dev"
+	evetest.Setup(
+		evetest.RequireEdgeDevice{
+			Name:              devName,
+			WithEVEVersion:    splitVersion,
+			WithHypervisor:    hypervisor,
+			WithTPM:           withTPM,
+			MinDiskSizeInMiB:  diskSizeMiB,
+			DeviceReusePolicy: evetest.CreateFromScratchWithInstaller,
+		},
+		evetest.RequireNetworkModel{NetworkModel: netmodels.SingleEthWithDHCP},
+	)
+	device := evetest.GetEdgeDevice(devName)
+
+	// The update is meant to fail, so the test window is only as long as the Core
+	// needs to boot and report in.
+	devConfig, appUUID := newOTATestDeviceConfig(devName, failedUpdateTestWindow)
+	device.ApplyConfig(devConfig, false, false)
+
+	assertAppReachable(t, device, appUUID, "before the broken split update")
+	assertCoreExpectsExtension(t, device)
+	assertExtensionHealthy(t, device, extensionHealthTimeout)
+
+	evetest.Checkpoint("split-installed")
+
+	// Update to the broken split image and wait for the device to reject it.
+	brokenShortVersion, bootedBrokenImage := upgradeToSplitImage(
+		t, device, brokenVersion, hypervisor, true)
+
+	evetest.Checkpoint("rolled-back")
+
+	// The device must have actually run the broken image before rejecting it.
+	t.Expect(bootedBrokenImage).To(BeTrue(),
+		"broken image %s was rejected without ever reaching the 'inprogress' "+
+			"partition state, so the rollback does not demonstrate that "+
+			"dm-verity refused the Extension", brokenShortVersion)
+
+	// The rollback reboot is still in flight when the revert is reported.
+	waitForDeviceReachable(t, device, deviceReachableTimeout)
+
+	// Unlike the rollback to a monolith, the device must come back split AND with
+	// a working Extension -- recovering the Core alone would not be enough here.
+	assertCoreExpectsExtension(t, device)
+	assertExtensionHealthy(t, device, extensionHealthTimeout)
+
+	// Exactly the surviving slot's Extension should remain: the rejected slot's
+	// is cleaned up, but the active one must not be.
+	assertExtImageCount(t, device, 1, extCleanupTimeout)
+
+	assertAppReachable(t, device, appUUID, "after the rollback to the previous split image")
 	assertDeviceStillReporting(t, device, deviceReportingTimeout)
 
 	evetest.Checkpoint("rollback-verified")
