@@ -13,11 +13,14 @@ import (
 	. "github.com/onsi/gomega"
 
 	uuid "github.com/satori/go.uuid"
+	"google.golang.org/protobuf/proto"
 
 	eveconfig "github.com/lf-edge/eve-api/go/config"
 	"github.com/lf-edge/eve-api/go/evecommon"
 	eveinfo "github.com/lf-edge/eve-api/go/info"
 	"github.com/lf-edge/eve/evetest"
+	api "github.com/lf-edge/eve/evetest/grpcapi/go"
+	"github.com/lf-edge/eve/evetest/netmodels"
 	"github.com/lf-edge/eve/pkg/pillar/types"
 )
 
@@ -309,6 +312,87 @@ func waitForBaseOSUpdate(t Gomega, device *evetest.EdgeDevice,
 				timeout, verb, targetShortVersion, lastState, lastStatus)
 			return sawInProgress
 		}
+	}
+}
+
+// waitUntilTargetBooted blocks until the device reports the target image on a
+// partition in the "inprogress" state, i.e. it has booted the new image and is
+// inside nodeagent's test window, before that window has decided anything.
+//
+// Tests that interfere with an update mid-flight need this: they have to act
+// once the new image is running but before it is committed, which neither
+// UpgradeEVE nor waitForBaseOSUpdate exposes -- both wait for a terminal state.
+func waitUntilTargetBooted(t Gomega, device *evetest.EdgeDevice,
+	targetShortVersion string, timeout time.Duration) {
+	log := evetest.Logger()
+	log.Infof("Waiting for the device to boot %s (inprogress)", targetShortVersion)
+	updates, stop := device.WatchDeviceInfo()
+	defer stop()
+
+	deadline := time.After(timeout)
+	for {
+		select {
+		case info, ok := <-updates:
+			if !ok {
+				t.Expect(ok).To(BeTrue(),
+					"device-info watch closed while waiting for %s to boot",
+					targetShortVersion)
+				return
+			}
+			for _, sw := range info.GetSwList() {
+				if sw.GetShortVersion() != targetShortVersion {
+					continue
+				}
+				if sw.GetUserStatus() == eveinfo.BaseOsStatus_FAILED {
+					t.Expect(false).To(BeTrue(),
+						"%s failed before it ever booted: %s",
+						targetShortVersion, sw.GetSubStatusStr())
+					return
+				}
+				if sw.GetPartitionState() == "inprogress" {
+					log.Infof("Device booted %s and is in its test window",
+						targetShortVersion)
+					return
+				}
+			}
+		case <-deadline:
+			logExtensionDiagnostics(device)
+			t.Expect(false).To(BeTrue(),
+				"timed out after %s waiting for the device to boot %s",
+				timeout, targetShortVersion)
+			return
+		}
+	}
+}
+
+// setControllerReachable cuts or restores the device's access to the controller
+// by re-applying the network model with (or without) a firewall rule dropping
+// everything addressed to it.
+//
+// Only controller-bound traffic is affected, so the harness can still reach the
+// device over SSH and watch it decide to roll back -- which matters, because
+// with the controller unreachable the device cannot report that decision.
+//
+// The model is a deep copy: netmodels holds shared package-level templates that
+// must not be mutated.
+func setControllerReachable(reachable bool) {
+	model := proto.Clone(netmodels.SingleEthWithDHCP).(*api.NetworkModel)
+	if !reachable {
+		model.Firewall = &api.Firewall{
+			Rules: []*api.FwRule{
+				{
+					DstSubnet: evetest.GetControllerIPv4().String() + "/32",
+					Action:    api.FwAction_FW_DROP,
+				},
+			},
+		}
+	}
+	evetest.UpdateNetworkModel(model)
+	if reachable {
+		evetest.Logger().Infof("Controller access restored")
+	} else {
+		evetest.Logger().Infof("Controller access cut (firewall drop to %s)",
+			evetest.GetControllerIPv4())
 	}
 }
 
