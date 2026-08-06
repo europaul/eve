@@ -258,6 +258,7 @@ func waitForBaseOSUpdate(t Gomega, device *evetest.EdgeDevice,
 	deadline := time.After(timeout)
 	var lastState, lastStatus string
 	var sawInProgress bool
+	var attemptStarted bool
 	for {
 		select {
 		case info, ok := <-updates:
@@ -283,9 +284,22 @@ func waitForBaseOSUpdate(t Gomega, device *evetest.EdgeDevice,
 						return sawInProgress
 					}
 				} else {
-					t.Expect(status).NotTo(Equal(eveinfo.BaseOsStatus_FAILED),
-						"base-OS update to %s failed: %s",
-						targetShortVersion, sw.GetSubStatusStr())
+					// A FAILED status only belongs to this attempt once the
+					// attempt has visibly started. On a retry the PREVIOUS
+					// attempt's FAILED is still what the device reports when the
+					// wait begins, and reading it as this attempt's verdict
+					// aborts before the retry has done anything. Waiting for any
+					// non-FAILED status first distinguishes the two, and still
+					// fails fast on a first attempt -- which starts out
+					// DOWNLOADING or UPDATING, never FAILED.
+					if status != eveinfo.BaseOsStatus_FAILED {
+						attemptStarted = true
+					}
+					if attemptStarted {
+						t.Expect(status).NotTo(Equal(eveinfo.BaseOsStatus_FAILED),
+							"base-OS update to %s failed: %s",
+							targetShortVersion, sw.GetSubStatusStr())
+					}
 					if partState == "active" {
 						log.Infof("Device booted image %s on the active partition",
 							targetShortVersion)
