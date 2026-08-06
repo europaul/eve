@@ -685,6 +685,57 @@ func (d *EdgeDevice) applyUpgradeConfig(config *EdgeDeviceConfig, shortVersion s
 	}
 }
 
+// RetryEVEUpgrade asks the device to re-attempt the base-OS update currently in
+// its configuration, and optionally waits for the outcome.
+//
+// This is the only way to make EVE install a version it has already rejected.
+// Once an update fails, the device remembers it and refuses that version even
+// though the controller keeps asking for it; baseosmgr re-attempts it only when
+// the retry counter in the base-OS configuration changes, and it persists the
+// new value so a failing image cannot put the device in an upgrade-fail-upgrade
+// loop. Bumping that counter is what a controller's "retry update" action does.
+//
+// The base OS must already be configured (by UpgradeEVE), since a retry
+// re-attempts that same image rather than specifying a new one.
+// When expectRevert is true the retry is expected to fail as well, and the
+// device to roll back again.
+// Returns the EVE short version of the image being retried.
+func (d *EdgeDevice) RetryEVEUpgrade(waitUntilUpgraded bool, expectRevert bool) string {
+	config := d.GetConfig()
+	if config.Baseos == nil {
+		d.th.t.Fatalf("Device %q has no base-OS update to retry", d.devName)
+	}
+	shortVersion := config.Baseos.BaseOsVersion
+
+	var counter uint32
+	if config.Baseos.RetryUpdate != nil {
+		counter = config.Baseos.RetryUpdate.Counter
+	}
+	counter++
+	config.Baseos.RetryUpdate = &eveconfig.DeviceOpsCmd{Counter: counter}
+
+	d.th.log.Infof("Retrying EVE upgrade to %s (retry counter=%d)",
+		shortVersion, counter)
+	// A successful retry reboots once; one that fails again reboots twice.
+	d.th.incExpectedRebootCount(d.devName)
+	if expectRevert {
+		d.th.incExpectedRebootCount(d.devName)
+	}
+	d.th.devicesM.Lock()
+	d.th.devices[d.devName].wasUpgraded = true
+	d.th.devicesM.Unlock()
+	d.ApplyConfig(config, false, false)
+
+	if waitUntilUpgraded {
+		if expectRevert {
+			d.waitForRevert(shortVersion)
+		} else {
+			d.waitForUpgrade(shortVersion)
+		}
+	}
+	return shortVersion
+}
+
 // waitForUpgrade blocks until the device's SwList contains an entry for
 // targetShortVersion with PartitionState=="active", or fatals on failure/timeout.
 func (d *EdgeDevice) waitForUpgrade(targetShortVersion string) {
