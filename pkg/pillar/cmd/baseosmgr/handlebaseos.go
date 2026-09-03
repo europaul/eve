@@ -911,7 +911,7 @@ func updateAndPublishZbootStatusAll(ctx *baseOsMgrContext) {
 		}
 		publishZbootStatus(ctx, *status)
 	}
-	cleanupUnusedExtensions()
+	cleanupUnusedExtensions(ctx)
 	syscall.Sync()
 }
 
@@ -919,9 +919,9 @@ func updateAndPublishZbootStatusAll(ctx *baseOsMgrContext) {
 // currently marked "unused". This makes cleanup robust across reboot paths,
 // including unsupported explicit downgrades that may bypass the normal
 // transition-specific cleanup hooks.
-func cleanupUnusedExtensions() {
-	for _, partName := range zboot.GetValidPartitionLabels() {
-		if zboot.GetPartitionState(partName) != "unused" {
+func cleanupUnusedExtensions(ctx *baseOsMgrContext) {
+	for _, partName := range ctx.zboot.GetValidPartitionLabels() {
+		if ctx.zboot.GetPartitionState(partName) != "unused" {
 			continue
 		}
 		CleanupUnusedExtension(partName)
