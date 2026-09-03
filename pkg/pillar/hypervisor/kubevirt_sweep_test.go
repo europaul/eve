@@ -90,6 +90,7 @@ func TestSweepDeletesOnlyOlderGenerations(t *testing.T) {
 
 	swapKubevirtClient(t, mockClient)
 	swapK8sClientNoPods(t)
+	enableKubeRuntime(t)
 
 	var ctx kubevirtContext
 	ctx.kubeConfig = &rest.Config{}
@@ -126,6 +127,7 @@ func TestSweepConfirmAbsenceTimeoutFails(t *testing.T) {
 
 	swapKubevirtClient(t, mockClient)
 	swapK8sClientNoPods(t)
+	enableKubeRuntime(t)
 	swapSweepConfirmInterval(t, time.Millisecond)
 
 	var ctx kubevirtContext

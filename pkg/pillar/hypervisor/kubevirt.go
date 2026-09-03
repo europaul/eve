@@ -80,6 +80,10 @@ var (
 	// swap-in-tests reason as the two vars above - without it, those call
 	// sites always try to read the real kubeconfig file from disk.
 	getKubeConfig = kubeapi.GetKubeConfig
+	// isHVTypeKube wraps base.IsHVTypeKube for the same reason: the kube
+	// entry points below refuse to run off a kube image, and that verdict
+	// comes from a file only a real device has.
+	isHVTypeKube = base.IsHVTypeKube
 )
 
 // MetaDataType is a type for different Domain types
@@ -1410,7 +1414,7 @@ func (ctx kubevirtContext) Delete(domainName string) (result error) {
 
 // StopReplicaVMI stops the VMI ReplicaSet
 func StopReplicaVMI(kubeconfig *rest.Config, repVmiName string) error {
-	if !base.IsHVTypeKube() {
+	if !isHVTypeKube() {
 		return fmt.Errorf("StopReplicaVMI: kube runtime is not enabled")
 	}
 
@@ -2385,7 +2389,7 @@ func setKubeToleration(timeOutSec int64) []k8sv1.Toleration {
 
 // StartReplicaPodContiner starts the ReplicaSet pod
 func StartReplicaPodContiner(ctx kubevirtContext, vmis *vmiMetaData) error {
-	if !base.IsHVTypeKube() {
+	if !isHVTypeKube() {
 		return fmt.Errorf("StartReplicaPodContiner: kube runtime is not enabled")
 	}
 
@@ -2461,7 +2465,7 @@ func checkForReplicaPod(ctx kubevirtContext, vmis *vmiMetaData) error {
 
 // InfoReplicaSetContainer gets the status of the ReplicaSet pod
 func InfoReplicaSetContainer(ctx kubevirtContext, vmis *vmiMetaData) (string, error) {
-	if !base.IsHVTypeKube() {
+	if !isHVTypeKube() {
 		return "", fmt.Errorf("InfoReplicaSetContainer: kube runtime is not enabled")
 	}
 
@@ -2639,7 +2643,7 @@ func getPodMetrics(clientset *metricsv.Clientset, pod k8sv1.Pod, vmis *vmiMetaDa
 
 // StopReplicaPodContainer stops the ReplicaSet pod
 func StopReplicaPodContainer(kubeconfig *rest.Config, repName string) error {
-	if !base.IsHVTypeKube() {
+	if !isHVTypeKube() {
 		return fmt.Errorf("StopReplicaPodContainer: kube runtime is not enabled")
 	}
 
@@ -2671,7 +2675,7 @@ func encodeSelections(selections []netattdefv1.NetworkSelectionElement) string {
 
 // InfoPodContainer : Get the pod information
 func InfoPodContainer(ctx kubevirtContext, podName string) (string, error) {
-	if !base.IsHVTypeKube() {
+	if !isHVTypeKube() {
 		return "", fmt.Errorf("InfoPodContainer: kube runtime is not enabled")
 	}
 

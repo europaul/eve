@@ -38,6 +38,16 @@ func swapKubevirtClient(t *testing.T, client kubecli.KubevirtClient) {
 	t.Cleanup(func() { newKubevirtClient = orig })
 }
 
+// enableKubeRuntime satisfies the kube-runtime guard, which otherwise refuses
+// every entry point in this file: the real check reads a file only a device
+// running a kube image has.
+func enableKubeRuntime(t *testing.T) {
+	t.Helper()
+	orig := isHVTypeKube
+	isHVTypeKube = func() bool { return true }
+	t.Cleanup(func() { isHVTypeKube = orig })
+}
+
 // TestStopReplicaVMIErrorHandling pins the fix to the inverted IsNotFound
 // check in StopReplicaVMI: success and NotFound must both return nil, and
 // only a real API error should be returned (and logged as an error).
@@ -77,6 +87,7 @@ func TestStopReplicaVMIErrorHandling(t *testing.T) {
 				Return(tc.delErr)
 
 			swapKubevirtClient(t, mockClient)
+			enableKubeRuntime(t)
 
 			err := StopReplicaVMI(&rest.Config{}, "myapp-a1b2c-1")
 			if tc.wantErr {
