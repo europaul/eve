@@ -20,6 +20,9 @@ type seams struct {
 	isVersionHVTypeKube func(version string) (bool, error)
 	getNodeDrainStatus  func(sub pubsub.Subscription) *kubeapi.NodeDrainStatus
 	requestNodeDrain    func(pub pubsub.Publication, requester kubeapi.DrainRequester, ctxStr string) error
+	// writeExtensionToPersist reaches the containerd CAS, which is absent
+	// under test and unreachable on a device whose containerd is down.
+	writeExtensionToPersist func(ref, targetPartLabel string) error
 }
 
 // defaultSeams returns the production-default seams. Run() captures
@@ -31,7 +34,8 @@ func defaultSeams(logArg *base.LogObject) seams {
 		getNodeDrainStatus: func(sub pubsub.Subscription) *kubeapi.NodeDrainStatus {
 			return kubeapi.GetNodeDrainStatus(sub, logArg)
 		},
-		requestNodeDrain: kubeapi.RequestNodeDrain,
+		requestNodeDrain:        kubeapi.RequestNodeDrain,
+		writeExtensionToPersist: WriteExtensionToPersist,
 	}
 }
 

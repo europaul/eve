@@ -258,6 +258,11 @@ type testCtx struct {
 	drainRequestErr   error
 	drainRequestCalls []kubeapi.DrainRequester
 
+	// Extension seam knobs — installWorker extracts the Extension layer
+	// from the CAS, which no unit test has.
+	extensionWrites   []string
+	extensionWriteErr error
+
 	// HV-type seam knobs — tests for the EVE-k personality switch
 	// override these.
 	currentIsKube    bool
@@ -330,6 +335,11 @@ func newTestCtx(t *testing.T) *testCtx {
 			requestNodeDrain: func(_ pubsub.Publication, requester kubeapi.DrainRequester, _ string) error {
 				tc.drainRequestCalls = append(tc.drainRequestCalls, requester)
 				return tc.drainRequestErr
+			},
+			writeExtensionToPersist: func(ref, targetPartLabel string) error {
+				tc.extensionWrites = append(tc.extensionWrites,
+					ref+"→"+targetPartLabel)
+				return tc.extensionWriteErr
 			},
 		},
 	}
