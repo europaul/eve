@@ -469,7 +469,9 @@ func readExtsloaderStatus(g Gomega, device *evetest.EdgeDevice) extsloaderStatus
 	var status extsloaderStatus
 	g.Expect(device.FileExists(extsloaderStatusFile)).To(BeTrue(),
 		"%s does not exist -- extsloader published no status", extsloaderStatusFile)
-	g.Expect(json.Unmarshal(device.ReadFile(extsloaderStatusFile), &status)).To(Succeed())
+	raw, err := device.ReadFile(extsloaderStatusFile)
+	g.Expect(err).NotTo(HaveOccurred())
+	g.Expect(json.Unmarshal(raw, &status)).To(Succeed())
 	return status
 }
 
