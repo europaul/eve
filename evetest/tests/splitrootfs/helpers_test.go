@@ -207,12 +207,12 @@ func assertAppReachable(t Gomega, device *evetest.EdgeDevice, appUUID uuid.UUID,
 // device to roll back to the previous version.
 func updateBaseOS(t Gomega, device *evetest.EdgeDevice,
 	targetVersion string, targetHypervisor evetest.Hypervisor,
-	expectRevert bool, delivery evetest.UpgradeDelivery) (string, bool) {
+	expectRevert bool, datastore evetest.BaseOSDatastoreType) (string, bool) {
 	log := evetest.Logger()
 	log.Infof("Updating base OS to %s (%s)", targetVersion, targetHypervisor)
 
 	shortVersion := device.UpgradeEVE(targetVersion, targetHypervisor,
-		false, expectRevert, evetest.WithUpgradeDelivery(delivery))
+		datastore, false, expectRevert)
 	log.Infof("Target image reports EVE short version %q", shortVersion)
 
 	booted := waitForBaseOSUpdate(t, device, shortVersion, expectRevert,
@@ -231,7 +231,7 @@ func upgradeToSplitImage(t Gomega, device *evetest.EdgeDevice,
 	targetVersion string, targetHypervisor evetest.Hypervisor,
 	expectRevert bool) (string, bool) {
 	return updateBaseOS(t, device, targetVersion, targetHypervisor, expectRevert,
-		evetest.UpgradeDeliveryOCIRegistry)
+		evetest.BaseOSDatastoreOCI)
 }
 
 // waitForBaseOSUpdate blocks until the device reaches the terminal state of a

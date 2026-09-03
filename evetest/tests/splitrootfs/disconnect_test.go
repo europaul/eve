@@ -171,7 +171,7 @@ func TestSplitUpdateDisconnectRollback(test *testing.T) {
 	// Start the update but do not wait for a verdict: the point is to interfere
 	// while it is still under test.
 	splitShortVersion := device.UpgradeEVE(splitVersion, splitHypervisor,
-		false, true, evetest.WithUpgradeDelivery(evetest.UpgradeDeliveryOCIRegistry))
+		evetest.BaseOSDatastoreOCI, false, true)
 	evetest.Logger().Infof("Target split image reports EVE short version %q",
 		splitShortVersion)
 

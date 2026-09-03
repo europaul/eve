@@ -142,7 +142,7 @@ func TestSplitUpdateRetryAfterFailure(test *testing.T) {
 	// First attempt: start the update, let it boot, then take the controller
 	// away so the device gives up on an otherwise-good image.
 	splitShortVersion := device.UpgradeEVE(splitVersion, splitHypervisor,
-		false, true, evetest.WithUpgradeDelivery(evetest.UpgradeDeliveryOCIRegistry))
+		evetest.BaseOSDatastoreOCI, false, true)
 	waitUntilTargetBooted(t, device, splitShortVersion, baseOSUpdateTimeout)
 	waitForDeviceReachable(t, device, deviceReachableTimeout)
 

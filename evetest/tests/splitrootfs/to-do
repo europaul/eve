@@ -1,0 +1,38 @@
+Do we need need to add new capabilities to the controller (zedcloud / Adam) to reseal the vault after PCRs 12/13 are changed due to upgrade to split rootfs (erofs hash)?
+    -> probably not because zedcloud already has this capability (the user needs to provide the new PCR template), but Adam doesn't - for now it works fine because we don't require attestation from Adam (EnforceTemplateAttestation=false)
+
+parts of extractExtensionFromCAS in external-services-loader.go can be replaced by ExtractExtensionDisk from cas/extension.go
+
+how does the user upload two images (rootfs + erofs) to the controller? how does the controller know that they belong together and it needs to put them as two layers in the same content tree?
+
+what happens if only rootfs is downloaded correctly?
+    -> This cannot happen: BaseOS manager does not start updating until the whole ContentTree is downloaded successfully.
+
+what happens if rootfs is installed correctly, but erofs is missing (from CAS for example)? do we go back to previous EVE after 10 mins?
+
+if CAS lives inside the vault, then how can the extension self-heal if the vault won't open unless PCR12 is set and PCR12 cannot be set, because /persist/ext-imga.img is not there?
+
+after OTA update is done - let's assume the controller sends a new config that doesn't contain the BaseOS ContentTree anymore - rootfs and ext image will be deleted from CAS. if at that point somebody deletes /persist/ext-imga.img then self-heal won't work anymore
+    -> yes self-heal won't work then
+
+IMPLEMENTATION-ROADMAP states "Individual Extension **services** failing to start should NOT block update success." But if the services fail - they will trigger the watchdog and the device will reboot which will prevent it from completing the 10min-test-period successfully.
+
+Read point 14 in IMPLEMENTATION-ROADMAP
+
+who starts the services from the extension images and why are they mounted onto /persist/eve-services instead of /containers/services?
+
+why is vector in ext and not in core? does logging even work without vector? how much later is vector started after newlogd? does the whole pipeline reconcile after vector is started?
+
+just wondering, how does mounting erofs with dm-verity work? do I need to put the whole image in memory first? is loop device an intermediate step?
+
+
+
+what is really inside the EVE container image that we produce with `make eve`? is it the same for split rootfs (+ ext image)? I think this also contains the layers needed by installer and maybe some other stuff that we don't need if we're going to use that image as a deliverable for the customer
+
+does split rootfs EVE really work with EVE-k? does it really put pkg/kube on /persists?
+
+does single image also include kubevirt? how does that work? does it include everything to run EVE-k? Daniel is against it because he wants to remove xen and including kubevirt in every image doesn't make sense. Or does it only make sense for the installer?
+
+
+
+do we start the extended services with all the measures that we have for core services (watchdogs, apparmor etc)?

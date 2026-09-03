@@ -20,7 +20,7 @@ import (
 func revertToMonolithImage(t Gomega, device *evetest.EdgeDevice,
 	targetVersion string, targetHypervisor evetest.Hypervisor) (string, bool) {
 	return updateBaseOS(t, device, targetVersion, targetHypervisor, false,
-		evetest.UpgradeDeliveryHTTPRootfs)
+		evetest.BaseOSDatastoreHTTP)
 }
 
 // TestSplitRevertToMonolith updates a device from a monolithic (single-rootfs)
