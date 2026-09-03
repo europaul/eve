@@ -9,8 +9,6 @@ package extsloader
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -29,8 +27,6 @@ import (
 	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/namespaces"
-	"github.com/google/go-tpm/legacy/tpm2"
-	"github.com/google/go-tpm/tpmutil"
 	"github.com/lf-edge/edge-containers/pkg/registry"
 	info "github.com/lf-edge/eve-api/go/info"
 	"github.com/lf-edge/eve/pkg/pillar/agentbase"
@@ -38,7 +34,6 @@ import (
 	"github.com/lf-edge/eve/pkg/pillar/base"
 	"github.com/lf-edge/eve/pkg/pillar/cas"
 	evecontainerd "github.com/lf-edge/eve/pkg/pillar/containerd"
-	"github.com/lf-edge/eve/pkg/pillar/evetpm"
 	"github.com/lf-edge/eve/pkg/pillar/pubsub"
 	"github.com/lf-edge/eve/pkg/pillar/types"
 	"github.com/lf-edge/eve/pkg/pillar/zboot"
@@ -73,14 +68,6 @@ const (
 	serviceOverrideDir      = "/run/eve-service-overrides"
 	serviceOverrideEnabled  = "enabled"
 	serviceOverrideDisabled = "disabled"
-
-	// PCR12 is used for Extension Image measurement. It is already in the
-	// default sealing PCR set (DefaultDiskKeySealingPCRs) and currently
-	// unused (zero). Extending it here binds extension state to vault
-	// unseal and attestation.
-	pcrIndexExtension       = 12
-	pcrHandleExtension      = tpmutil.Handle(tpm2.PCRFirst + pcrIndexExtension)
-	extensionMeasurementLog = "/persist/status/extsloader_tpm_event_log"
 )
 
 var (
@@ -107,40 +94,6 @@ var disabledServices = map[types.GlobalSettingKey]string{
 	types.MemoryMonitorEnabled: "memory-monitor",
 }
 
-// extendPCR12 extends PCR12 with a SHA256 hash of the given measurement string.
-// On devices without a TPM, it logs a notice and returns nil so the caller
-// can proceed normally. An event log entry is appended for attestation.
-func extendPCR12(measurement string) error {
-	rw, err := tpm2.OpenTPM(evetpm.TpmDevicePath)
-	if err != nil {
-		log.Noticef("TPM not available, skipping PCR12 extend for %q", measurement)
-		return nil
-	}
-	defer rw.Close()
-
-	hash := sha256.Sum256([]byte(measurement))
-	if err := tpm2.PCRExtend(rw, pcrHandleExtension, tpm2.AlgSHA256, hash[:], ""); err != nil {
-		return fmt.Errorf("PCR12 extend failed for %q: %w", measurement, err)
-	}
-
-	pcr, _ := tpm2.ReadPCR(rw, pcrIndexExtension, tpm2.AlgSHA256)
-	log.Noticef("PCR12 extended: %q -> %s", measurement, hex.EncodeToString(pcr))
-	return nil
-}
-
-// writeMeasurementLog writes a simple text log of PCR12 extension events
-// for attestation payload context (same pattern as measure-config).
-func writeMeasurementLog(events []string) {
-	if err := os.MkdirAll(filepath.Dir(extensionMeasurementLog), 0755); err != nil {
-		log.Warnf("Failed to create measurement log directory: %v", err)
-		return
-	}
-	content := strings.Join(events, "\n") + "\n"
-	if err := os.WriteFile(extensionMeasurementLog, []byte(content), 0644); err != nil {
-		log.Warnf("Failed to write measurement log: %v", err)
-	}
-}
-
 type externalServicesContext struct {
 	agentbase.AgentBase
 	ps                   *pubsub.PubSub
@@ -152,11 +105,9 @@ type externalServicesContext struct {
 	scanTrigger          chan string
 	pkgsImgPath          string
 	pkgsImgMounted       bool
-	// mountAttempted records that mountPkgsImg has already run. Mount and
-	// service-start failures extend PCR12 with a terminal sentinel, so they
-	// must not be retried: a second attempt would extend PCR12 again and make
-	// the value depend on the retry count. Discovery failures extend nothing,
-	// which is what makes them safe to retry.
+	// mountAttempted records that mountPkgsImg has already run, so a failed
+	// mount or service start is not retried. Discovery failures leave no
+	// state behind, which is what makes them safe to retry.
 	mountAttempted   bool
 	servicesStarted  map[string]bool
 	servicesSkipped  map[string]bool // services intentionally not started
@@ -230,12 +181,6 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	}
 	ctx.pubExtsloaderStatus = pubExtsloaderStatus
 	publishExtsloaderStatus(ctx, types.ExtsloaderStateStarting, "", "", "")
-
-	// Extend PCR12 to mark loader startup. This is the first extend in
-	// the boot sequence; PCR12 transitions from all-zeros to a known value.
-	if err := extendPCR12("extsloader:starting"); err != nil {
-		log.Errorf("PCR12 starting extend: %v", err)
-	}
 
 	// Subscribe to global config
 	log.Functionf("Setting up global config subscription")
@@ -494,8 +439,8 @@ func shouldTriggerRescanOnVaultStatus(ctx *externalServicesContext, status types
 
 // canRetryDiscovery reports whether another discovery attempt is worth making:
 // an Extension is expected, none is mounted, and no mount has been attempted
-// yet (see externalServicesContext.mountAttempted for why that last condition
-// matters for PCR12).
+// yet (see externalServicesContext.mountAttempted for why that last
+// condition matters).
 func canRetryDiscovery(ctx *externalServicesContext) bool {
 	return !ctx.pkgsImgMounted && !ctx.mountAttempted && coreExpectsExtension()
 }
@@ -617,17 +562,11 @@ func tryMountAndStartServices(ctx *externalServicesContext) {
 	restoreLimits := raiseCgroupLimitsForExtMount(pkgsImgPath)
 
 	// Mount extension image via dm-verity. The root hash is loaded from the
-	// Core Image (/etc/ext-verity-roothash) and used both for veritysetup
-	// and for PCR12 measurement. No separate file hash is needed: the root
-	// hash is the Merkle tree root and uniquely identifies the image content.
+	// Core Image (/etc/ext-verity-roothash) and used by veritysetup.
 	log.Functionf("Attempting to mount extension image...")
 	ctx.mountAttempted = true
-	rootHash, err := mountPkgsImg(pkgsImgPath)
-	if err != nil {
+	if err := mountPkgsImg(pkgsImgPath); err != nil {
 		log.Errorf("Failed to mount extension image: %v", err)
-		if err2 := extendPCR12("extsloader:failed:mount-failed"); err2 != nil {
-			log.Errorf("PCR12 mount-failed extend: %v", err2)
-		}
 		publishExtsloaderStatus(ctx, types.ExtsloaderStateFailed, fmt.Sprintf("mount failed: %v", err), partName, pkgsImgPath)
 		restoreLimits()
 		return
@@ -635,19 +574,6 @@ func tryMountAndStartServices(ctx *externalServicesContext) {
 
 	ctx.pkgsImgMounted = true
 	log.Noticef("✓ Mounted extension image at %s", extMount)
-
-	// Measure the verified extension image into PCR12 using the dm-verity
-	// root hash. This is the same root hash that veritysetup used to set up
-	// the device mapper, so it represents exactly what the kernel verified.
-	// The root hash is trusted because it comes from the read-only Core
-	// squashfs (measured into PCR13 by GRUB).
-	var measureEvents []string
-	measureEvents = append(measureEvents, "extsloader:starting")
-	verifiedMeasurement := "extsloader:image-verified:" + rootHash
-	if err := extendPCR12(verifiedMeasurement); err != nil {
-		log.Errorf("PCR12 image-verified extend: %v", err)
-	}
-	measureEvents = append(measureEvents, verifiedMeasurement)
 
 	// Release page cache for the backing image file and restore cgroup
 	// limits immediately after mount, before starting services. The
@@ -666,21 +592,9 @@ func tryMountAndStartServices(ctx *externalServicesContext) {
 	log.Noticef("Starting all services from extension image...")
 	if err := startAllServices(ctx); err != nil {
 		log.Errorf("Failed to start services: %v", err)
-		failMeasurement := "extsloader:failed:services-failed"
-		if err2 := extendPCR12(failMeasurement); err2 != nil {
-			log.Errorf("PCR12 services-failed extend: %v", err2)
-		}
-		measureEvents = append(measureEvents, failMeasurement)
-		writeMeasurementLog(measureEvents)
 		publishExtsloaderStatus(ctx, types.ExtsloaderStateFailed, fmt.Sprintf("start services failed: %v", err), partName, pkgsImgPath)
 	} else {
 		log.Noticef("✓ All services started successfully")
-		runningMeasurement := "extsloader:services-running"
-		if err := extendPCR12(runningMeasurement); err != nil {
-			log.Errorf("PCR12 services-running extend: %v", err)
-		}
-		measureEvents = append(measureEvents, runningMeasurement)
-		writeMeasurementLog(measureEvents)
 		publishExtsloaderStatus(ctx, types.ExtsloaderStateReady, "", partName, pkgsImgPath)
 	}
 }
@@ -928,31 +842,31 @@ func findPkgsImg(imageName string) string {
 // identity of the Extension. dm-verity verification is mandatory — there is
 // no legacy fallback. If veritysetup is missing or roothash is not found,
 // mount fails and the update should be rolled back.
-func mountPkgsImg(imgPath string) (rootHash string, err error) {
+func mountPkgsImg(imgPath string) error {
 	// Check if already mounted
 	mounts, err := os.ReadFile("/proc/mounts")
 	if err != nil {
-		return "", err
+		return err
 	}
 	if strings.Contains(string(mounts), extMount) {
 		log.Functionf("extension image already mounted")
-		return "", nil
+		return nil
 	}
 
 	// Create mount point
 	if err := os.MkdirAll(extMount, 0755); err != nil {
-		return "", err
+		return err
 	}
 
 	// dm-verity mount (mandatory, no legacy fallback)
-	rootHash, mounted, err := mountPkgsImgWithVerity(imgPath)
+	mounted, err := mountPkgsImgWithVerity(imgPath)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if !mounted {
-		return "", fmt.Errorf("dm-verity mount failed: veritysetup or roothash not available")
+		return fmt.Errorf("dm-verity mount failed: veritysetup or roothash not available")
 	}
-	return rootHash, nil
+	return nil
 }
 
 // dropImagePageCache advises the kernel to release cached pages for the
@@ -1053,17 +967,17 @@ func raiseCgroupLimitsForExtMount(imgPath string) func() {
 	}
 }
 
-func mountPkgsImgWithVerity(imgPath string) (string, bool, error) {
+func mountPkgsImgWithVerity(imgPath string) (bool, error) {
 	if _, err := exec.LookPath("veritysetup"); err != nil {
-		return "", false, fmt.Errorf("veritysetup binary not found in Core image: %w", err)
+		return false, fmt.Errorf("veritysetup binary not found in Core image: %w", err)
 	}
 
 	rootHash, hashOffset, rootHashPath, foundRootHash, err := loadExtensionRootHash()
 	if err != nil {
-		return "", false, err
+		return false, err
 	}
 	if !foundRootHash {
-		return "", false, fmt.Errorf("dm-verity root hash not found in Core (%s)", extRootHashPath)
+		return false, fmt.Errorf("dm-verity root hash not found in Core (%s)", extRootHashPath)
 	}
 
 	mapperName := extensionVerityMapperName(imgPath)
@@ -1080,7 +994,7 @@ func mountPkgsImgWithVerity(imgPath string) (string, bool, error) {
 		imgPath, mapperName, imgPath, rootHash)
 	cmdOut, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", false, fmt.Errorf("veritysetup open failed: %w; output: %s", err, string(cmdOut))
+		return false, fmt.Errorf("veritysetup open failed: %w; output: %s", err, string(cmdOut))
 	}
 
 	// Split-rootfs extension image is expected to be erofs.
@@ -1088,10 +1002,10 @@ func mountPkgsImgWithVerity(imgPath string) (string, bool, error) {
 	mountOut, err := mountCmd.CombinedOutput()
 	if err != nil {
 		_ = exec.Command("veritysetup", "close", mapperName).Run()
-		return "", false, fmt.Errorf("mount verified erofs failed: %w; output: %s", err, string(mountOut))
+		return false, fmt.Errorf("mount verified erofs failed: %w; output: %s", err, string(mountOut))
 	}
 	log.Noticef("Mounted extension image via dm-verity at %s", extMount)
-	return rootHash, true, nil
+	return true, nil
 }
 
 // loadExtensionRootHash loads the dm-verity root hash and data size from the

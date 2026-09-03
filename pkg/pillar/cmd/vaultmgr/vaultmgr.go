@@ -119,8 +119,6 @@ const (
 	// Time limits for event loop handlers
 	errorTime   = 3 * time.Minute
 	warningTime = 40 * time.Second
-	// extsloader synchronization to ensure deterministic PCR12 -> unseal ordering.
-	extsloaderStateWaitTimeout = 2 * time.Minute
 )
 
 var (
@@ -327,7 +325,6 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 		// TPM is enabled. Check if defaultVault directory exists, if not set vaultconfig
 		tpmKeyOnlyMode := checkAndPublishVaultConfig(&ctx)
 		handler.SetHandlerOptions(vault.HandlerOptions{TpmKeyOnlyMode: tpmKeyOnlyMode})
-		waitForExtsloaderState(ps)
 	}
 
 	if tpmEnabled {
@@ -393,57 +390,6 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 			// Publish current status of vault
 			getAndPublishAllVaultStatuses(&ctx)
 		}
-	}
-}
-
-// waitForExtsloaderState waits for extsloader to reach a terminal state
-// (ready or failed) before vault setup, ensuring PCR 12 has its final value.
-// Uses pubsub subscription rather than file polling. On monolithic images
-// (no extsloader), the subscription will have no items and we proceed after
-// timeout. Safe to call on all image types.
-func waitForExtsloaderState(ps *pubsub.PubSub) {
-	log.Noticef("Waiting for extsloader terminal state (PCR12) before vault setup")
-
-	sub, err := ps.NewSubscription(pubsub.SubscriptionOptions{
-		AgentName:   "extsloader",
-		MyAgentName: agentName,
-		TopicImpl:   types.ExtsloaderStatus{},
-		Activate:    true,
-	})
-	if err != nil {
-		log.Warnf("ExtsloaderStatus subscription failed (monolithic image?): %v; proceeding", err)
-		return
-	}
-	defer sub.Close()
-
-	deadline := time.After(extsloaderStateWaitTimeout)
-	for {
-		select {
-		case change := <-sub.MsgChan():
-			sub.ProcessChange(change)
-			items := sub.GetAll()
-			for _, item := range items {
-				status, ok := item.(types.ExtsloaderStatus)
-				if !ok {
-					continue
-				}
-				switch status.State {
-				case types.ExtsloaderStateReady:
-					log.Noticef("extsloader ready (PCR12 final); proceeding with vault setup")
-					return
-				case types.ExtsloaderStateFailed:
-					log.Warnf("extsloader failed (%s) (PCR12 final); proceeding with vault setup", status.Reason)
-					return
-				default:
-					log.Noticef("extsloader state: %s; waiting for terminal state", status.State)
-				}
-			}
-		case <-deadline:
-			log.Warnf("Timed out (%s) waiting for extsloader terminal state; proceeding with vault setup",
-				extsloaderStateWaitTimeout)
-			return
-		}
-		ps.StillRunning(agentName, warningTime, errorTime)
 	}
 }
 
