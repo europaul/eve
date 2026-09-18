@@ -27,7 +27,6 @@ import (
 	"github.com/containerd/containerd/cio"
 	"github.com/containerd/containerd/errdefs"
 	"github.com/containerd/containerd/namespaces"
-	"github.com/lf-edge/edge-containers/pkg/registry"
 	info "github.com/lf-edge/eve-api/go/info"
 	"github.com/lf-edge/eve/pkg/pillar/agentbase"
 	"github.com/lf-edge/eve/pkg/pillar/agentlog"
@@ -533,7 +532,7 @@ func tryMountAndStartServices(ctx *externalServicesContext) {
 		// This handles forward upgrade from monolithic to split rootfs.
 		log.Noticef("Extension image %s not found on disk, attempting CAS self-heal...", imageName)
 		var err error
-		pkgsImgPath, err = extractExtensionFromCAS(ctx, partName, imageName)
+		pkgsImgPath, err = extractExtensionFromCAS(ctx, partName)
 		if err != nil {
 			// Publish the cause, not just the absence: with the Extension down
 			// there is no sshd to inspect the device with, so ExtsloaderStatus
@@ -610,29 +609,22 @@ func extensionImageName(partName string) (string, error) {
 	}
 }
 
-// extractExtensionFromCAS attempts CAS self-healing: when the Extension
-// image file is missing on PERSIST but the Core Image expects one
-// (/etc/ext-verity-roothash exists), find the active BaseOS ContentTree
-// reference, locate the disk-additional layer in CAS, and extract it.
-// This handles the forward upgrade case where old monolithic code wrote
-// Core but skipped Extension during WriteToPartition.
-// The error describes why recovery was not possible; the caller publishes it
-// in ExtsloaderStatus.
-func extractExtensionFromCAS(ctx *externalServicesContext, partName, imageName string) (string, error) {
+// extractExtensionFromCAS recovers a missing Extension image for the given
+// partition from the active BaseOS ContentTree in containerd CAS. The error
+// says why recovery was not possible; the caller publishes it in
+// ExtsloaderStatus.
+func extractExtensionFromCAS(ctx *externalServicesContext, partName string) (string, error) {
 	targetPath, err := types.ExtensionImagePath(partName)
 	if err != nil {
 		return "", fmt.Errorf("cannot resolve Extension path for partition %s: %w", partName, err)
 	}
 
-	// Only attempt self-heal if Core expects an Extension
 	if _, err := os.Stat(extRootHashHostPath); os.IsNotExist(err) {
 		return "", errNoExtensionExpected
 	}
 
 	log.Noticef("extractExtensionFromCAS: Extension expected but missing, attempting CAS extraction")
 
-	// Find the active BaseOS ContentTree reference by reading
-	// ContentTreeStatus published by volumemgr via pubsub filesystem.
 	ref := findActiveBaseOSReference(ctx, partName)
 	if ref == "" {
 		return "", errNoContentTree
@@ -640,57 +632,17 @@ func extractExtensionFromCAS(ctx *externalServicesContext, partName, imageName s
 
 	log.Noticef("extractExtensionFromCAS: active BaseOS reference: %s", ref)
 
-	// Use the same Puller.Pull + FilesTarget mechanism as WriteToPartition.
-	// The OCI image config label org.lfedge.eci.artifact.disk-0 tells
-	// edge-containers which file inside the tar layers is the Extension.
-	// FilesTarget.Disks[0] receives that file.
 	casClient, err := cas.NewCAS("containerd")
 	if err != nil {
 		return "", fmt.Errorf("cannot open CAS: %w", err)
 	}
 	defer casClient.CloseClient()
 
-	ctrdCtx, done := casClient.CtrNewUserServicesCtx()
-	defer done()
-
-	resolver, err := casClient.Resolver(ctrdCtx)
-	if err != nil {
-		return "", fmt.Errorf("cannot resolve from CAS: %w", err)
+	if err := cas.ExtractExtensionDisk(casClient, ref, targetPath); err != nil {
+		return "", err
 	}
 
-	tmpPath := targetPath + ".tmp"
-	f, err := os.Create(tmpPath)
-	if err != nil {
-		return "", fmt.Errorf("cannot write %s: %w", tmpPath, err)
-	}
-
-	puller := registry.Puller{Image: ref}
-	_, artifact, err := puller.Pull(
-		&registry.FilesTarget{Disks: []io.Writer{f}, AcceptHash: true},
-		0, false, os.Stderr, resolver,
-	)
-	f.Close()
-
-	if err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("pull of %s from CAS failed: %w", ref, err)
-	}
-	_ = artifact // Artifact.Disks is populated from layer annotations only; we use config label routing instead
-
-	// Verify something was actually written (config label routing via pathWriters)
-	fi, err := os.Stat(tmpPath)
-	if err != nil || fi.Size() == 0 {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("%s carries no Extension disk "+
-			"(monolithic image or missing org.lfedge.eci.artifact.disk-0 label)", ref)
-	}
-
-	if err := os.Rename(tmpPath, targetPath); err != nil {
-		os.Remove(tmpPath)
-		return "", fmt.Errorf("cannot install recovered Extension at %s: %w", targetPath, err)
-	}
-
-	log.Noticef("extractExtensionFromCAS: successfully extracted Extension (%d bytes) to %s", fi.Size(), targetPath)
+	log.Noticef("extractExtensionFromCAS: successfully extracted Extension to %s", targetPath)
 	return targetPath, nil
 }
 
