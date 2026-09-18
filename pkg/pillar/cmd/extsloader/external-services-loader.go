@@ -103,6 +103,7 @@ type externalServicesContext struct {
 	subVaultStatus       pubsub.Subscription
 	pubExtsloaderStatus  pubsub.Publication
 	scanTrigger          chan string
+	configTrigger        chan struct{}
 	pkgsImgPath          string
 	// pkgsImgMounted and mountAttempted are set by the scan goroutine and
 	// read by the pubsub handlers.
@@ -163,6 +164,7 @@ func Run(ps *pubsub.PubSub, loggerArg *logrus.Logger, logArg *base.LogObject, ar
 	ctx := &externalServicesContext{
 		ps:              ps,
 		scanTrigger:     make(chan string, 1),
+		configTrigger:   make(chan struct{}, 1),
 		servicesStarted: make(map[string]bool),
 		servicesSkipped: make(map[string]bool),
 	}
@@ -335,6 +337,11 @@ func scanForPkgsImg(ctx *externalServicesContext) {
 			log.Functionf("Extension rescan triggered: %s", reason)
 			ctx.ps.StillRunning(agentName, warningTime, errorTime)
 			tryMountAndStartServices(ctx)
+		case <-ctx.configTrigger:
+			if ctx.pkgsImgMounted.Load() {
+				ctx.ps.StillRunning(agentName, warningTime, errorTime)
+				updateDisabledServices(ctx)
+			}
 		case <-ticker.C:
 			verifyCount++
 			log.Functionf("Periodic verification scan #%d", verifyCount)
@@ -1490,9 +1497,10 @@ func handleGlobalConfigImpl(ctxArg interface{}, key string, statusArg interface{
 	log.Functionf("handleGlobalConfigImpl for %s", key)
 	agentlog.HandleGlobalConfig(log, ctx.subGlobalConfig, agentName, ctx.CLIParams().DebugOverride, logger)
 
-	// Check if any previously skipped service should now be started.
-	if ctx.pkgsImgMounted.Load() {
-		updateDisabledServices(ctx)
+	// servicesStarted and servicesSkipped belong to the scan goroutine.
+	select {
+	case ctx.configTrigger <- struct{}{}:
+	default:
 	}
 }
 
