@@ -4,6 +4,7 @@
 package baseosmgr
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -15,9 +16,6 @@ import (
 // image in containerd CAS and writes it to the paired PERSIST file.
 // The target filename is derived from the partition label:
 // IMGA → ext-imga.img, IMGB → ext-imgb.img.
-//
-// Uses the same registry.Puller mechanism as WriteToPartition so it correctly
-// reads Docker labels (org.lfedge.eci.artifact.disk-0) set by linuxkit.
 //
 // Returns nil if the OCI image has no Extension disk (monolithic image).
 func WriteExtensionToPersist(ref, targetPartLabel string) error {
@@ -35,12 +33,11 @@ func WriteExtensionToPersist(ref, targetPartLabel string) error {
 	log.Noticef("WriteExtensionToPersist: extracting Extension from %s to %s", ref, targetPath)
 
 	if err := cas.ExtractExtensionDisk(casClient, ref, targetPath); err != nil {
+		if errors.Is(err, cas.ErrNoExtensionDisk) {
+			log.Noticef("WriteExtensionToPersist: no Extension disk in %s (monolithic image)", ref)
+			return nil
+		}
 		return fmt.Errorf("WriteExtensionToPersist: %w", err)
-	}
-
-	if _, err := os.Stat(targetPath); err != nil {
-		log.Noticef("WriteExtensionToPersist: no Extension disk in %s (monolithic image)", ref)
-		return nil
 	}
 
 	log.Noticef("WriteExtensionToPersist: successfully wrote Extension to %s", targetPath)
