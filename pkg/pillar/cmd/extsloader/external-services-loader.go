@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -103,11 +104,13 @@ type externalServicesContext struct {
 	pubExtsloaderStatus  pubsub.Publication
 	scanTrigger          chan string
 	pkgsImgPath          string
-	pkgsImgMounted       bool
+	// pkgsImgMounted and mountAttempted are set by the scan goroutine and
+	// read by the pubsub handlers.
+	pkgsImgMounted atomic.Bool
 	// mountAttempted records that mountPkgsImg has already run, so a failed
 	// mount or service start is not retried. Discovery failures leave no
 	// state behind, which is what makes them safe to retry.
-	mountAttempted   bool
+	mountAttempted   atomic.Bool
 	servicesStarted  map[string]bool
 	servicesSkipped  map[string]bool // services intentionally not started
 	containerdClient *containerd.Client
@@ -337,7 +340,7 @@ func scanForPkgsImg(ctx *externalServicesContext) {
 			log.Functionf("Periodic verification scan #%d", verifyCount)
 			ctx.ps.StillRunning(agentName, warningTime, errorTime)
 			switch {
-			case ctx.pkgsImgMounted:
+			case ctx.pkgsImgMounted.Load():
 				log.Functionf("extension image already mounted, verifying services")
 				verifyServices(ctx)
 			case !canRetryDiscovery(ctx):
@@ -441,7 +444,7 @@ func shouldTriggerRescanOnVaultStatus(ctx *externalServicesContext, status types
 // yet (see externalServicesContext.mountAttempted for why that last
 // condition matters).
 func canRetryDiscovery(ctx *externalServicesContext) bool {
-	return !ctx.pkgsImgMounted && !ctx.mountAttempted && coreExpectsExtension()
+	return !ctx.pkgsImgMounted.Load() && !ctx.mountAttempted.Load() && coreExpectsExtension()
 }
 
 func shouldTriggerRescanOnBaseOsStatus(ctx *externalServicesContext, status types.BaseOsStatus) bool {
@@ -504,7 +507,7 @@ func baseOsStatusForPartition(ctx *externalServicesContext, partName string) *ty
 // tryMountAndStartServices searches for extension image and starts services.
 func tryMountAndStartServices(ctx *externalServicesContext) {
 	log.Functionf("tryMountAndStartServices: Checking if already mounted")
-	if ctx.pkgsImgMounted {
+	if ctx.pkgsImgMounted.Load() {
 		log.Functionf("extension image already mounted, skipping...")
 		publishExtsloaderStatus(ctx, types.ExtsloaderStateReady, "", "", ctx.pkgsImgPath)
 		return
@@ -563,7 +566,7 @@ func tryMountAndStartServices(ctx *externalServicesContext) {
 	// Mount extension image via dm-verity. The root hash is loaded from the
 	// Core Image (/etc/ext-verity-roothash) and used by veritysetup.
 	log.Functionf("Attempting to mount extension image...")
-	ctx.mountAttempted = true
+	ctx.mountAttempted.Store(true)
 	if err := mountPkgsImg(pkgsImgPath); err != nil {
 		log.Errorf("Failed to mount extension image: %v", err)
 		publishExtsloaderStatus(ctx, types.ExtsloaderStateFailed, fmt.Sprintf("mount failed: %v", err), partName, pkgsImgPath)
@@ -571,7 +574,7 @@ func tryMountAndStartServices(ctx *externalServicesContext) {
 		return
 	}
 
-	ctx.pkgsImgMounted = true
+	ctx.pkgsImgMounted.Store(true)
 	log.Noticef("✓ Mounted extension image at %s", extMount)
 
 	// Release page cache for the backing image file and restore cgroup
@@ -1488,7 +1491,7 @@ func handleGlobalConfigImpl(ctxArg interface{}, key string, statusArg interface{
 	agentlog.HandleGlobalConfig(log, ctx.subGlobalConfig, agentName, ctx.CLIParams().DebugOverride, logger)
 
 	// Check if any previously skipped service should now be started.
-	if ctx.pkgsImgMounted {
+	if ctx.pkgsImgMounted.Load() {
 		updateDisabledServices(ctx)
 	}
 }
