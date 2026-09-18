@@ -90,6 +90,11 @@ var hvOnlyServices = map[string]string{
 // disabledServices maps global config keys to the service names they control.
 // These services are still started during bootstrap so watcher can pause them
 // to preserve the legacy lifecycle (started first, then paused if disabled).
+//
+// Disabling only pauses the containerd task. A paused service stops kicking
+// its watchdog file, so only services that do not register under
+// /run/watchdog may be listed here unless the pause path is taught to remove
+// that registration first.
 var disabledServices = map[types.GlobalSettingKey]string{
 	types.MemoryMonitorEnabled: "memory-monitor",
 }
