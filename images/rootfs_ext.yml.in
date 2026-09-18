@@ -2,17 +2,13 @@
 # Non-critical services blob (not bootable on its own).
 # Pairs with rootfs_core.yml.in to form a complete EVE image.
 #
-# Contains: kube, vector, debug, guacd, edgeview,
+# Contains: kube, debug, guacd, edgeview,
 # vtpm, memory-monitor, node-exporter
 
 services:
   - name: kube
     image: KUBE_TAG
     cgroupsPath: /eve/services/kube
-    oomScoreAdj: -999
-  - name: vector
-    image: VECTOR_TAG
-    cgroupsPath: /eve/services/vector
     oomScoreAdj: -999
   - name: debug
     image: DEBUG_TAG

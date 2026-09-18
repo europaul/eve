@@ -2,7 +2,9 @@
 # Contains universal pillar (PILLAR_K_TAG) with only critical services.
 # wwan is kept here in the Core so cellular connectivity does not depend on the
 # Extension being loaded and verified.
-# Non-critical services (kube, vector, debug, guacd, edgeview,
+# vector is kept here in the Core because newlogd forwards device logs through
+# it; without vector the device is unobservable while the Extension is down.
+# Non-critical services (kube, debug, guacd, edgeview,
 # vtpm, memory-monitor, node-exporter) are in rootfs_ext.yml.in.
 
 kernel:
@@ -53,6 +55,10 @@ services:
   - name: monitor
     image: MONITOR_TAG
     cgroupsPath: /eve/services/monitor
+    oomScoreAdj: -999
+  - name: vector
+    image: VECTOR_TAG
+    cgroupsPath: /eve/services/vector
     oomScoreAdj: -999
   - name: newlogd
     image: NEWLOGD_TAG

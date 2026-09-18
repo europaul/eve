@@ -195,8 +195,9 @@ build matrix complexity and simplify fleet management.
 
 Analysis of the rootfs content shows which packages can move to a separate image.
 The POC Extension template (`images/rootfs_ext.yml.in`) defines the package set:
-eve-debug, eve-vtpm, eve-wwan, eve-vector, eve-kube (HV=k only), guacd, edgeview,
-memory-monitor, node-exporter.
+eve-debug, eve-vtpm, eve-kube (HV=k only), guacd, edgeview,
+memory-monitor, node-exporter. (eve-wwan and eve-vector were part of the POC
+Extension but have since moved to Core; see §5.)
 
 Size estimates below are derived from build experiments on `master` at commit `94c51ee`
 (see *Single Image Evaluation* report). The experiments measured effective rootfs size
@@ -386,10 +387,11 @@ The monolithic rootfs is split into two images:
   Extension Loader. Lives on IMGA/IMGB partitions. Measured into PCR 13 by GRUB.
 
 - **Extension Image** (erofs + dm-verity): Non-critical services — eve-debug, eve-vtpm,
-  eve-vector, memory-monitor, edgeview, guacd, node-exporter, eve-kube (HV=k
-  only). Lives on PERSIST partition. Loaded after boot by Extension Loader.
-  (eve-wwan stays in Core — cellular connectivity must not depend on the
-  Extension; see §5 "Core vs Extension Service Allocation".)
+  memory-monitor, edgeview, guacd, node-exporter, eve-kube (HV=k only). Lives
+  on PERSIST partition. Loaded after boot by Extension Loader.
+  (eve-wwan and eve-vector stay in Core — cellular connectivity and device
+  logging must not depend on the Extension; see §5 "Core vs Extension Service
+  Allocation".)
 
 ### Image Format
 
@@ -533,11 +535,15 @@ when part of the platform is not verified.
 
 **Core Image**: kernel, init, firmware, pillar (nim, zedagent, domainmgr, volumemgr,
 baseosmgr, etc.), containerd, networking (wlan, wwan, dnsmasq), Extension Loader
-(extsloader), watchdog, monitor, apparmor, measure-config. eve-wwan is in Core so
-cellular-only devices stay manageable even if the Extension fails to load.
+(extsloader), watchdog, monitor, newlogd, vector, apparmor, measure-config.
+eve-wwan is in Core so cellular-only devices stay manageable even if the
+Extension fails to load. eve-vector is in Core because newlogd forwards device
+logs through it and drops entries once its socket buffer fills; a device whose
+Extension is missing or fails verification would otherwise send no logs to the
+controller.
 
 **Extension Image** (from `images/rootfs_ext.yml.in`): eve-debug, eve-vtpm,
-eve-vector, memory-monitor, node-exporter, edgeview, guacd, eve-kube (HV=k only).
+memory-monitor, node-exporter, edgeview, guacd, eve-kube (HV=k only).
 
 ### Kernel Module and Firmware Deferred Loading
 
@@ -854,9 +860,9 @@ degraded mode and update should fail testing window -> rollback to prior slot.
 Today, nodeagent marks an update as successful (transitions from `testing` to `active`)
 when the device can connect to the controller and attestation completes. For split-rootfs,
 this is insufficient: an update that boots Core successfully but fails to load Extension
-leaves the device without debug access, logging, monitoring, and ancillary services
-(guacd, vector, edgeview, etc.). Core connectivity — including cellular (eve-wwan) —
-is unaffected because those services live in Core.
+leaves the device without debug access, monitoring, and ancillary services
+(guacd, edgeview, etc.). Core connectivity — including cellular (eve-wwan) — and
+device logging (vector) are unaffected because those services live in Core.
 
 **Proposed success criteria:**
 

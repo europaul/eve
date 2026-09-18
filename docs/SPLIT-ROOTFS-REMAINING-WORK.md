@@ -70,6 +70,13 @@ here only so they are not re-opened. The design/roadmap docs reflect them.
   is +20.9 MB, still well under the 300 MB budget. See `SPLIT-ROOTFS-DESIGN.md`
   "Architectural Decisions".
 
+- **vector is in Core (resolved).** `eve-vector` lives in the Core image
+  (`rootfs_core.yml.in`), not the Extension. newlogd forwards device logs
+  through vector and drops entries once its 1000-entry socket buffer is full,
+  so with vector in the Extension boot-time logs were lost and a device in
+  degraded mode sent no logs at all. Cost on the universal Core is ~12 MB
+  compressed. See `SPLIT-ROOTFS-DESIGN.md` "Architectural Decisions".
+
 - **Extension lives on plain `/persist`, not the vault (resolved).** extsloader
   must read and measure the Extension into PCR 12 *before* vault unlock, so the
   ordering is deliberately inverted: vaultmgr/zedagent wait for extsloader

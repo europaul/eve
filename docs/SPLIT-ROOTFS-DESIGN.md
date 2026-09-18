@@ -1157,6 +1157,7 @@ Expected PCR 12: 0xBBBB5678...
 - pillar core (nim, zedagent, domainmgr, volumemgr, baseosmgr)
 - containerd
 - networking (wlan, wwan, dnsmasq)
+- logging (newlogd, vector)
 - kernel, firmware
 - Extension Loader
 
@@ -1167,6 +1168,8 @@ Expected PCR 12: 0xBBBB5678...
 - eve-nvidia (GPU support)
 
 **Decision: eve-wwan is in Core Image.** Some deployments use cellular as the only network connection. If eve-wwan were in Extension and the Extension fails, cellular-only devices lose all controller connectivity. This violates Goal #4 (graceful degradation — device must remain manageable). The size impact (~5MB) is acceptable.
+
+**Decision: eve-vector is in Core Image.** newlogd forwards every device log entry destined for the controller through vector's socket (`vector.enabled` defaults to true). While vector is not running, newlogd's socket writer holds only the first 1000 entries and drops everything after that. With vector in the Extension this meant boot-time logs (including extsloader's own messages) never reached the controller, and in degraded mode — Extension missing or failing verification — no device logs reached the controller at all. That is the situation in which logs matter most, so it violates Goal #4 as much as losing connectivity would. Vector adds ~12MB compressed to the Core (~261MB → ~273MB on the universal amd64 build), leaving ~27MB under the 300MB budget.
 
 ### 2. Image Format
 
