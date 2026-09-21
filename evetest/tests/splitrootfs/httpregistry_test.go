@@ -1,6 +1,13 @@
 // Copyright (c) 2026 Zededa, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
+// Parked proof of concept: delivering a split image as static files from a
+// plain web server instead of a container registry. The approach was not
+// adopted, and the test still uses the UpgradeOption/UpgradeDeliveryOCIOverHTTP
+// framework API that has since been removed, so it is excluded from the build.
+//
+//go:build ignore
+
 package splitrootfs_test
 
 import (
