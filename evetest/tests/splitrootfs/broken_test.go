@@ -86,7 +86,7 @@ const (
 //   - TPM: enable TPM emulation (default: true).
 //   - DISK_SIZE_MB: device disk size in MiB (0 = framework default).
 //   - INITIAL_EVE_VERSION: monolithic EVE version to start on and roll back to
-//     (required; default "16.0.1-lts").
+//     (required; default defaultInitialEVEVersion).
 //   - INITIAL_HYPERVISOR: hypervisor of the monolithic version (default: kvm).
 func TestSplitBrokenExtensionRollback(test *testing.T) {
 	evetestT := evetest.Init(test)
@@ -107,10 +107,10 @@ func TestSplitBrokenExtensionRollback(test *testing.T) {
 		},
 		evetest.TestParameterDefinition{
 			Key:          initialEVEVersionParamKey,
-			DefaultValue: "16.0.1-lts",
+			DefaultValue: defaultInitialEVEVersion,
 			Description: evetest.TestParameterDescription{
 				Summary: "Monolithic EVE version the device starts on and rolls back to",
-				Default: "16.0.1-lts",
+				Default: defaultInitialEVEVersion,
 			},
 		},
 		evetest.TestParameterDefinition{

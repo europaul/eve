@@ -66,7 +66,7 @@ import (
 //   - TPM: enable TPM emulation (default: true).
 //   - DISK_SIZE_MB: device disk size in MiB (0 = framework default).
 //   - INITIAL_EVE_VERSION: monolithic EVE version to start on (required;
-//     default "16.0.1-lts").
+//     default defaultInitialEVEVersion).
 //   - INITIAL_HYPERVISOR: hypervisor of the monolithic version (default: kvm).
 func TestSplitUpdateRetryAfterFailure(test *testing.T) {
 	evetestT := evetest.Init(test)
@@ -81,10 +81,10 @@ func TestSplitUpdateRetryAfterFailure(test *testing.T) {
 		evetest.DiskSizeMiBParameter(),
 		evetest.TestParameterDefinition{
 			Key:          initialEVEVersionParamKey,
-			DefaultValue: "16.0.1-lts",
+			DefaultValue: defaultInitialEVEVersion,
 			Description: evetest.TestParameterDescription{
 				Summary: "Monolithic EVE version the device starts on",
-				Default: "16.0.1-lts",
+				Default: defaultInitialEVEVersion,
 			},
 		},
 		evetest.TestParameterDefinition{

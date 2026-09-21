@@ -17,6 +17,12 @@ import (
 const (
 	initialEVEVersionParamKey = "INITIAL_EVE_VERSION"
 	initialHypervisorParamKey = "INITIAL_HYPERVISOR"
+
+	// defaultInitialEVEVersion is the oldest LTS release whose downloader
+	// applies the datastore's trusted CA while resolving an OCI tag
+	// (16.0-stable a1a54d877). Older releases cannot resolve the split image
+	// from evetest's self-signed embedded registry.
+	defaultInitialEVEVersion = "16.0.2-lts"
 )
 
 // TestSplitUpgradeFromMonolith performs an end-to-end base-OS update from a
@@ -66,7 +72,7 @@ const (
 //   - TPM: enable TPM emulation (default: true).
 //   - DISK_SIZE_MB: device disk size in MiB (0 = framework default).
 //   - INITIAL_EVE_VERSION: monolithic EVE version to start on (required; default
-//     "16.0.1-lts").
+//     defaultInitialEVEVersion).
 //   - INITIAL_HYPERVISOR: hypervisor of the initial version (default: kvm).
 func TestSplitUpgradeFromMonolith(test *testing.T) {
 	evetestT := evetest.Init(test)
@@ -81,10 +87,10 @@ func TestSplitUpgradeFromMonolith(test *testing.T) {
 		evetest.DiskSizeMiBParameter(),
 		evetest.TestParameterDefinition{
 			Key:          initialEVEVersionParamKey,
-			DefaultValue: "16.0.1-lts",
+			DefaultValue: defaultInitialEVEVersion,
 			Description: evetest.TestParameterDescription{
 				Summary: "Monolithic EVE version the device starts on before the split update",
-				Default: "16.0.1-lts",
+				Default: defaultInitialEVEVersion,
 			},
 		},
 		evetest.TestParameterDefinition{
